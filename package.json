@@ -1,0 +1,21 @@
+{
+  "name": "platform-inspeksi-srgs-final-all-in-one",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.76.0",
+    "@vitejs/plugin-react": "^5.0.4",
+    "vite": "^7.1.12",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "lucide-react": "^0.552.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {}
+}
