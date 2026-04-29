@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import logoSrgs from './assets/logo-icon.png'
+import SharedAdminPanel from './SharedAdminPanel.jsx'
 import './styles.css'
 
 const APP_CODE = 'inspeksi_unit'
@@ -116,6 +117,8 @@ function App({ embeddedProfile = null, embeddedContext = null, onChangeApp = nul
   const [context, setContext] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
   const mountedRef = useRef(false)
   const bootIdRef = useRef(0)
 
@@ -326,10 +329,10 @@ function Shell({ profile, context, setContext }){
   const nav = useMemo(() => {
     const items = [['dashboard', 'Dashboard', LayoutDashboard]]
     if (canAdmin(role)) items.push(['admin', 'Admin Panel', Users])
-    if (canAdmin(role) || role === 'GL') items.push(['units', 'Master Unit', Truck], ['parkings', 'Master Parkiran', ParkingCircle], ['parameters', 'Parameter Checklist', ClipboardCheck], ['plans', 'Plan Bulanan', CalendarCheck], ['inspections', 'Inspeksi', FileText])
+    if (canAdmin(role)) items.push(['parameters', 'Parameter Checklist', ClipboardCheck])
+    if (canAdmin(role) || role === 'GL' || role === 'Atasan Site') items.push(['units', 'Master Unit', Truck], ['parkings', 'Master Parkiran', ParkingCircle], ['plans', 'Plan Bulanan', CalendarCheck], ['inspections', 'Inspeksi', FileText])
     if (role === 'Viewer') items.push(['outstanding','Outstanding', AlertTriangle])
-    if (role === 'Atasan Site') items.push(['outstanding','Outstanding', AlertTriangle])
-    if (canAdmin(role) || role === 'GL') items.push(['outstanding','Outstanding', AlertTriangle])
+    if (canAdmin(role) || role === 'GL' || role === 'Atasan Site') items.push(['outstanding','Outstanding', AlertTriangle])
     if (canApprove(role)) items.push(['approval','Approval', CheckCircle2])
     return items
   }, [role])
@@ -362,7 +365,7 @@ function Shell({ profile, context, setContext }){
 
 function InspeksiPage({ page, profile, context }){
   if (page === 'dashboard') return <Dashboard context={context} />
-  if (page === 'admin') return <AdminPanel profile={profile} context={context} />
+  if (page === 'admin') return <SharedAdminPanel profile={profile} context={context} />
   if (page === 'units') return <MasterUnits profile={profile} context={context} />
   if (page === 'parkings') return <MasterParkings profile={profile} context={context} />
   if (page === 'parameters') return <ParameterChecklist context={context} />
@@ -373,7 +376,21 @@ function InspeksiPage({ page, profile, context }){
   return <Dashboard context={context} />
 }
 
+
+function DashboardDateFilter({ dateFrom, dateTo, setDateFrom, setDateTo, onClear }) {
+  return <Panel title="Filter Tanggal Dashboard" desc="KPI, achievement, chart, dan row data dashboard mengikuti rentang tanggal ini.">
+    <div className="form-grid">
+      <label>Dari Tanggal<input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} /></label>
+      <label>Sampai Tanggal<input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} /></label>
+      <button type="button" className="secondary" onClick={onClear}>Reset Filter</button>
+    </div>
+  </Panel>
+}
+
 function Dashboard({ context }){
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const [dateFrom, setDateFrom] = useState(todayStr)
+  const [dateTo, setDateTo] = useState(todayStr)
   const [loading, setLoading] = useState(true)
   const [plans, setPlans] = useState([])
   const [records, setRecords] = useState([])
@@ -382,7 +399,7 @@ function Dashboard({ context }){
   const [units, setUnits] = useState([])
   const [error, setError] = useState('')
 
-  useEffect(() => { load() }, [context.id])
+  useEffect(() => { load() }, [context.id, dateFrom, dateTo])
   async function load(){
     setLoading(true); setError('')
     try{
@@ -392,6 +409,8 @@ function Dashboard({ context }){
       planQ = scopeQuery(planQ, context)
       recordQ = scopeQuery(recordQ, context)
       findingQ = scopeQuery(findingQ, context)
+      if (dateFrom) { planQ = planQ.gte('created_at', dateFrom); recordQ = recordQ.gte('inspected_at', dateFrom); findingQ = findingQ.gte('created_at', dateFrom) }
+      if (dateTo) { const end = dateTo + 'T23:59:59'; planQ = planQ.lte('created_at', end); recordQ = recordQ.lte('inspected_at', end); findingQ = findingQ.lte('created_at', end) }
       const [planRes, recordRes, findingRes, siteRes, unitRes] = await Promise.all([
         planQ, recordQ, findingQ,
         supabase.from('sites').select('*').neq('site_code', 'JIEP').eq('status','Aktif').order('site_code'),
@@ -460,6 +479,7 @@ function Dashboard({ context }){
   if (loading) return <Panel title="Dashboard"><p className="muted">Memuat dashboard...</p></Panel>
   if (error) return <Panel title="Dashboard"><div className="error">{error}</div><button onClick={load}>Coba Lagi</button></Panel>
   return <div className="stack">
+    <DashboardDateFilter dateFrom={dateFrom} dateTo={dateTo} setDateFrom={setDateFrom} setDateTo={setDateTo} onClear={()=>{setDateFrom('');setDateTo('')}} />
     <div className="kpi-grid">
       <Kpi title="Total Plan" value={plans.length} icon={<CalendarCheck/>} />
       <Kpi title="Plan Approved" value={approvedPlans} icon={<CheckCircle2/>} />
@@ -1154,11 +1174,14 @@ function StatusPill({ value }){
   const cls = v.includes('Tidak') || v.includes('Reject') || v === 'Open' ? 'red' : v.includes('Close') || v.includes('Approved') || v === 'Aman' ? 'green' : v.includes('Submitted') || v.includes('Request') ? 'blue' : 'amber'
   return <span className={`pill ${cls}`}>{v}</span>
 }
-function DataTable({ rows, customActions }){
+function DataTable({ rows, customActions, actions }){
+  const [q, setQ] = useState('')
   if (!rows?.length) return <p className="muted">Belum ada data.</p>
   const cols = Object.keys(rows[0])
-  return <div className="table-wrap"><table><thead><tr>{cols.map(c => <th key={c}>{c}</th>)}</tr></thead><tbody>{rows.map((r, idx) => <tr key={idx}>{cols.map(c => <td key={c}>{c === 'aksi' && customActions ? customActions(idx) : String(r[c] ?? '')}</td>)}</tr>)}</tbody></table></div>
+  const filtered = rows.filter(r => !q || Object.values(r).some(v => String(v ?? '').toLowerCase().includes(q.toLowerCase())))
+  return <div className="data-table-block"><div className="table-search"><Search size={16}/><input placeholder="Search row data..." value={q} onChange={e=>setQ(e.target.value)} /></div><div className="table-wrap"><table><thead><tr>{cols.map(c => <th key={c}>{c}</th>)}</tr></thead><tbody>{filtered.map((r, idx) => { const originalIdx = rows.indexOf(r); return <tr key={idx}>{cols.map(c => <td key={c}>{c === 'aksi' && customActions ? customActions(originalIdx) : String(r[c] ?? '')}</td>)}</tr>})}</tbody></table></div>{filtered.length===0&&<p className="muted">Tidak ada data sesuai pencarian.</p>}</div>
 }
+
 function PreviewTable({ rows }){ return <div className="preview"><div className="summary-strip"><span><b>{rows.length}</b> Total Baris</span><span><b>{rows.filter(r=>!r.error).length}</b> Valid</span><span><b>{rows.filter(r=>r.error).length}</b> Error</span></div><DataTable rows={rows}/></div> }
 function Modal({ title, children, onClose }){ return <div className="modal-backdrop"><div className="modal"><div className="modal-head"><h2>{title}</h2><button className="icon-btn" onClick={onClose}><X size={20}/></button></div>{children}</div></div> }
 function FullCenter({ text, action }){ return <div className="full-center"><ShieldCheck size={48}/><h2>{text}</h2>{action}</div> }

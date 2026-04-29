@@ -4,9 +4,10 @@ import * as XLSX from 'xlsx'
 import {
   AlertTriangle, Award, BarChart3, CalendarCheck, CheckCircle2, ClipboardCheck,
   Download, FileQuestion, FileText, LogOut, Menu, PlayCircle, ShieldCheck,
-  Truck, Upload, Users, Video, XCircle
+  Truck, Upload, Users, Video, XCircle, Search
 } from 'lucide-react'
 import logoSrgs from './assets/logo-icon.png'
+import SharedAdminPanel from './SharedAdminPanel.jsx'
 import './styles.css'
 
 const supabase = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY)
@@ -26,7 +27,7 @@ function exportXlsx(name, rows){ const wb = XLSX.utils.book_new(); XLSX.utils.bo
 function templateXlsx(name, rows){ const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Template'); XLSX.writeFile(wb, name) }
 async function readExcel(file){ const buf = await file.arrayBuffer(); const wb = XLSX.read(buf,{type:'array'}); return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:''}) }
 function badge(s){ const v = String(s || '-'); const cls = v.includes('Lulus') || v.includes('Closed') || v.includes('Aktif') || v.includes('Sudah') ? 'b-green' : v.includes('Open') || v.includes('Habis') || v.includes('Expired') || v.includes('Wajib') ? 'b-red' : v.includes('Cuti') || v.includes('Belum') ? 'b-amber' : 'b-blue'; return <span className={`badge ${cls}`}>{v}</span> }
-async function createAuthUser(email, password, nama){ if(!email || !password) return; try{ await supabase.functions.invoke('admin-create-user',{ body:{ email, password, nama } }) }catch(e){ console.warn('admin-create-user gagal / dilewati', e) } }
+async function createAuthUser({ email, password, nama, nrp, app_id, site_id, role='Driver' }){ if(!email || !password) return {ok:true,skipped:true}; const {data,error}=await supabase.functions.invoke('admin-create-user',{ body:{ email:normEmail(email), password, nama, nrp, app_id, role, site_id } }); if(error) throw new Error(error.message||'Gagal membuat akun Auth'); if(data && data.ok===false) throw new Error(data.error||'Gagal membuat akun Auth'); return data||{ok:true}; }
 
 function App({ embeddedProfile=null, embeddedWork=null, onChangeApp=null } = {}){
   const [session,setSession]=useState(null), [profile,setProfile]=useState(null), [access,setAccess]=useState([]), [work,setWork]=useState(null), [loading,setLoading]=useState(true)
@@ -71,20 +72,36 @@ function Shell({profile,work,setWork}){
     <main className="main"><div className="top app-header"><div className="header-copy"><h1>{title}</h1><p>Kelola DRD, induksi driver, masa dinas, cuti, hasil tes, dan pencapaian site.</p></div><div className="header-actions redesign-actions"><div className="user-chip"><Users size={16}/><span>{profile?.nama} · {work.sites?.site_name||'All Site'}</span></div><button className="secondary" onClick={()=>setWork(null)}>Ganti Aplikasi</button><button className="secondary" onClick={()=>supabase.auth.signOut()}><LogOut size={16}/>Logout</button></div></div><DRD page={page} profile={profile} work={work}/></main>
   </div>
 }
-function DRD({page,profile,work}){ if(page==='dashboard')return <Dashboard work={work}/>; if(page==='admin')return <AdminPanelDRD profile={profile} work={work}/>; if(page==='questions')return <Questions/>; if(page==='videos')return <InductionVideos/>; if(page==='drivers')return <MasterDriver profile={profile} work={work}/>; if(page==='cuti')return <CutiPeriods profile={profile} work={work}/>; if(page==='test')return <DriverTest profile={profile}/>; if(page==='induction')return <DriverInduction profile={profile}/>; return <Results profile={profile} work={work}/> }
+function DRD({page,profile,work}){ if(page==='dashboard')return <Dashboard work={work}/>; if(page==='admin')return <SharedAdminPanel profile={profile} context={work}/>; if(page==='questions')return <Questions/>; if(page==='videos')return <InductionVideos/>; if(page==='drivers')return <MasterDriver profile={profile} work={work}/>; if(page==='cuti')return <CutiPeriods profile={profile} work={work}/>; if(page==='test')return <DriverTest profile={profile}/>; if(page==='induction')return <DriverInduction profile={profile}/>; return <Results profile={profile} work={work}/> }
 
 function Panel({title,desc,action,children}){ return <div className="panel"><div className="panel-head"><div><h2>{title}</h2>{desc&&<p className="muted">{desc}</p>}</div>{action}</div>{children}</div> }
-function DataTable({rows, actions}){ if(!rows?.length) return <p className="muted">Belum ada data.</p>; const cols=Object.keys(rows[0]); return <div className="table-wrap"><table className="table"><thead><tr>{cols.map(c=><th key={c}>{c}</th>)}{actions&&<th>AKSI</th>}</tr></thead><tbody>{rows.map((r,i)=><tr key={r.id || i}>{cols.map(c=><td key={c}>{String(r[c]??'')}</td>)}{actions&&<td>{actions(r,i)}</td>}</tr>)}</tbody></table></div> }
+function DataTable({rows, actions}){ const [q,setQ]=useState(''); if(!rows?.length) return <p className="muted">Belum ada data.</p>; const cols=Object.keys(rows[0]); const filtered=rows.filter(r=>!q||Object.values(r).some(v=>String(v??'').toLowerCase().includes(q.toLowerCase()))); return <div className="data-table-block"><div className="table-search"><Search size={16}/><input placeholder="Search row data..." value={q} onChange={e=>setQ(e.target.value)}/></div><div className="table-wrap"><table className="table"><thead><tr>{cols.map(c=><th key={c}>{c}</th>)}{actions&&<th>AKSI</th>}</tr></thead><tbody>{filtered.map((r,i)=>{const originalIdx=rows.indexOf(r);return <tr key={r.id || i}>{cols.map(c=><td key={c}>{String(r[c]??'')}</td>)}{actions&&<td>{actions(r,originalIdx)}</td>}</tr>})}</tbody></table></div>{filtered.length===0&&<p className="muted">Tidak ada data sesuai pencarian.</p>}</div> }
+
+
+function DashboardDateFilter({ dateFrom, dateTo, setDateFrom, setDateTo, onClear }) {
+  return <Panel title="Filter Tanggal Dashboard" desc="KPI, achievement, chart, dan row data dashboard mengikuti rentang tanggal ini.">
+    <div className="form-grid">
+      <label>Dari Tanggal<input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} /></label>
+      <label>Sampai Tanggal<input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} /></label>
+      <button type="button" className="secondary" onClick={onClear}>Reset Filter</button>
+    </div>
+  </Panel>
+}
 
 function Dashboard({work}){
   const [drivers,setDrivers]=useState([]), [attempts,setAttempts]=useState([]), [periods,setPeriods]=useState([])
-  useEffect(()=>{load()},[work.id])
+  const [dateFrom,setDateFrom]=useState(''), [dateTo,setDateTo]=useState('')
+  useEffect(()=>{load()},[work.id,dateFrom,dateTo])
   async function load(){
     let dq=supabase.from('drivers').select('*,sites(site_code,site_name)').eq('status','Aktif'); if(!isAdmin(work)) dq=dq.eq('site_id',work.site_id)
+    let aq=supabase.from('drd_attempts').select('*,drivers(site_id,sites(site_code,site_name))').order('created_at',{ascending:false})
+    let pq=supabase.from('drd_induction_periods').select('*,drivers(nama_driver,nrp_driver,site_id,sites(site_code,site_name))').order('created_at',{ascending:false})
+    if(dateFrom){ aq=aq.gte('created_at',dateFrom); pq=pq.gte('created_at',dateFrom) }
+    if(dateTo){ const end=dateTo+'T23:59:59'; aq=aq.lte('created_at',end); pq=pq.lte('created_at',end) }
     const [{data:d},{data:a},{data:p}] = await Promise.all([
       dq,
-      supabase.from('drd_attempts').select('*,drivers(site_id,sites(site_code,site_name))').order('created_at',{ascending:false}),
-      supabase.from('drd_induction_periods').select('*,drivers(nama_driver,nrp_driver,site_id,sites(site_code,site_name))').order('created_at',{ascending:false})
+      aq,
+      pq
     ])
     const scopedAttempts=(a||[]).filter(r=>isAdmin(work)||r.drivers?.site_id===work.site_id)
     const scopedPeriods=(p||[]).filter(r=>isAdmin(work)||r.drivers?.site_id===work.site_id)
@@ -105,7 +122,7 @@ function Dashboard({work}){
   Object.values(bySite).forEach(x=>{ x.drd_belum=x.total-x.drd_ok; x.achievement=x.total?Math.round(x.drd_ok/x.total*100):0 })
   const siteRows=Object.values(bySite).sort((a,b)=>b.achievement-a.achievement)
   const inductionRows=periods.map(p=>({ driver:p.drivers?.nama_driver, nrp:p.drivers?.nrp_driver, site:p.drivers?.sites?.site_code, cuti_mulai:p.cuti_start_date, onsite:p.onsite_date, status:p.status, alert:isOnsiteDue(p)?'Open - Wajib Induksi':'-' }))
-  return <div className="stack"><div className="kpi-grid"><Kpi title="Total Driver" value={total} icon={<Truck/>}/><Kpi title="Sudah DRD" value={drdOk} icon={<CheckCircle2/>}/><Kpi title="Belum DRD" value={drdBelum} icon={<AlertTriangle/>}/><Kpi title="Achievement DRD" value={`${drdAch}%`} icon={<BarChart3/>}/><Kpi title="Open Induksi" value={openInduksi} icon={<Video/>}/><Kpi title="Induksi Closed" value={closedInduksi} icon={<ShieldCheck/>}/><Kpi title="Achievement Induksi" value={`${inductionAch}%`} icon={<Award/>}/><Kpi title="Masa Dinas Habis" value={drivers.filter(d=>isExpired(d.end_masa_dinas)).length} icon={<CalendarCheck/>}/></div><Panel title="Dashboard DRD per Site" desc="Pencapaian DRD dihitung dari driver aktif yang sudah lulus dan belum expired." action={<button onClick={()=>exportXlsx('achievement-drd-site.xlsx',siteRows)}><Download size={16}/> Export</button>}><div className="site-chart">{siteRows.map(r=><div className="site-bar" key={r.site}><div className="site-meta"><b>{r.site}</b><span>{r.drd_ok}/{r.total} · {r.achievement}%</span></div><div className="bar"><span style={{width:`${Math.min(r.achievement,100)}%`}}/></div></div>)}</div><DataTable rows={siteRows}/></Panel><Panel title="Dashboard Induksi Driver" desc="Driver yang sudah onsite setelah cuti tetapi belum lulus induksi dihitung Open dan mengurangi achievement induksi site." action={<button onClick={()=>exportXlsx('dashboard-induksi-driver.xlsx',inductionRows)}><Download size={16}/> Export</button>}><div className="summary-strip"><span><b>{inductionTarget}</b> Wajib Induksi</span><span><b>{openPeriodInput}</b> Butuh Input Periode</span><span><b>{openInduksi}</b> Open Induksi</span><span><b>{closedInduksi}</b> Closed</span><span><b>{inductionAch}%</b> Achievement</span></div><DataTable rows={inductionRows}/></Panel></div>
+  return <div className="stack"><DashboardDateFilter dateFrom={dateFrom} dateTo={dateTo} setDateFrom={setDateFrom} setDateTo={setDateTo} onClear={()=>{setDateFrom('');setDateTo('')}}/><div className="kpi-grid"><Kpi title="Total Driver" value={total} icon={<Truck/>}/><Kpi title="Sudah DRD" value={drdOk} icon={<CheckCircle2/>}/><Kpi title="Belum DRD" value={drdBelum} icon={<AlertTriangle/>}/><Kpi title="Achievement DRD" value={`${drdAch}%`} icon={<BarChart3/>}/><Kpi title="Open Induksi" value={openInduksi} icon={<Video/>}/><Kpi title="Induksi Closed" value={closedInduksi} icon={<ShieldCheck/>}/><Kpi title="Achievement Induksi" value={`${inductionAch}%`} icon={<Award/>}/><Kpi title="Masa Dinas Habis" value={drivers.filter(d=>isExpired(d.end_masa_dinas)).length} icon={<CalendarCheck/>}/></div><Panel title="Dashboard DRD per Site" desc="Pencapaian DRD dihitung dari driver aktif yang sudah lulus dan belum expired." action={<button onClick={()=>exportXlsx('achievement-drd-site.xlsx',siteRows)}><Download size={16}/> Export</button>}><div className="site-chart">{siteRows.map(r=><div className="site-bar" key={r.site}><div className="site-meta"><b>{r.site}</b><span>{r.drd_ok}/{r.total} · {r.achievement}%</span></div><div className="bar"><span style={{width:`${Math.min(r.achievement,100)}%`}}/></div></div>)}</div><DataTable rows={siteRows}/></Panel><Panel title="Dashboard Induksi Driver" desc="Driver yang sudah onsite setelah cuti tetapi belum lulus induksi dihitung Open dan mengurangi achievement induksi site." action={<button onClick={()=>exportXlsx('dashboard-induksi-driver.xlsx',inductionRows)}><Download size={16}/> Export</button>}><div className="summary-strip"><span><b>{inductionTarget}</b> Wajib Induksi</span><span><b>{openPeriodInput}</b> Butuh Input Periode</span><span><b>{openInduksi}</b> Open Induksi</span><span><b>{closedInduksi}</b> Closed</span><span><b>{inductionAch}%</b> Achievement</span></div><DataTable rows={inductionRows}/></Panel></div>
 }
 function Kpi({title,value,icon}){ return <div className="kpi"><div><span>{title}</span><strong>{value}</strong></div><div className="kpi-icon">{icon}</div></div> }
 
@@ -130,7 +147,7 @@ function InductionVideos(){
 }
 
 function MasterDriver({profile,work}){
-  const [drivers,setDrivers]=useState([]), [vendors,setVendors]=useState([]), [sites,setSites]=useState([]), [preview,setPreview]=useState([]), [msg,setMsg]=useState(''), [editing,setEditing]=useState(null)
+  const [drivers,setDrivers]=useState([]), [vendors,setVendors]=useState([]), [sites,setSites]=useState([]), [preview,setPreview]=useState([]), [msg,setMsg]=useState(''), [editing,setEditing]=useState(null), [modalOpen,setModalOpen]=useState(false)
   const emptyForm={site_id:work.site_id||'',nama_driver:'',nrp_driver:'',email:'',password:'',vendor_id:'',status:'Aktif',mulai_dinas:'',end_masa_dinas:''}
   const [form,setForm]=useState(emptyForm)
   useEffect(()=>{load()},[work.id])
@@ -144,15 +161,19 @@ function MasterDriver({profile,work}){
     ])
     setDrivers(d||[]); setVendors(v||[]); setSites(s||[])
   }
-  function reset(){ setEditing(null); setForm({...emptyForm,site_id:work.site_id||''}) }
+  function reset(){ setEditing(null); setModalOpen(false); setForm({...emptyForm,site_id:work.site_id||''}) }
   function edit(d){
     setEditing(d.id)
     setForm({site_id:d.site_id||work.site_id||'',nama_driver:d.nama_driver||'',nrp_driver:d.nrp_driver||'',email:d.email||'',password:'',vendor_id:d.vendor_id||'',status:d.status||'Aktif',mulai_dinas:d.mulai_dinas||'',end_masa_dinas:d.end_masa_dinas||''})
+    setModalOpen(true)
   }
   async function save(e){
     e.preventDefault(); setMsg('')
     const siteId=isAdmin(work)?form.site_id:work.site_id
-    if(form.email&&form.password) await createAuthUser(form.email,form.password,form.nama_driver)
+    const nrpKey=clean(form.nrp_driver).toLowerCase(), emailKey=normEmail(form.email), nameKey=clean(form.nama_driver).toLowerCase()
+    const dup=drivers.find(d=>String(d.id)!==String(editing||'') && (clean(d.nrp_driver).toLowerCase()===nrpKey || (emailKey && normEmail(d.email)===emailKey) || (nameKey && clean(d.nama_driver).toLowerCase()===nameKey)))
+    if(dup) return setMsg(dup.nrp_driver&&clean(dup.nrp_driver).toLowerCase()===nrpKey?'NRP driver sudah terdaftar.':(emailKey&&normEmail(dup.email)===emailKey?'Email driver sudah terdaftar.':'Nama driver sudah terdaftar.'))
+    if(form.email&&form.password){ try{ await createAuthUser({email:form.email,password:form.password,nama:form.nama_driver,nrp:form.nrp_driver,app_id:work.app_id||work.applications?.id,site_id:siteId,role:'Driver'}) }catch(err){ return setMsg(err.message||'Gagal membuat akun login driver') } }
     const payload={site_id:siteId,nama_driver:form.nama_driver,nrp_driver:form.nrp_driver,email:normEmail(form.email)||null,vendor_id:form.vendor_id||null,status:form.status,mulai_dinas:form.mulai_dinas||null,end_masa_dinas:form.end_masa_dinas||null,updated_at:new Date().toISOString()}
     const {error}=editing
       ? await supabase.from('drivers').update(payload).eq('id',editing)
@@ -169,15 +190,24 @@ function MasterDriver({profile,work}){
   async function previewFile(file){
     if(!file)return
     const rows=await readExcel(file)
+    const seenNrp=new Set(), seenEmail=new Set(), seenName=new Set()
     const mapped=rows.map((r,i)=>{
       const siteCode=clean(r.site_code).toUpperCase()
       const site=isAdmin(work)?sites.find(s=>s.site_code===siteCode):sites.find(s=>s.id===work.site_id)
       const vendorName=clean(r.vendor_name)
       const vendor=vendors.find(v=>clean(v.vendor_name).toLowerCase()===vendorName.toLowerCase())
       let error=''
+      const nrpKey=clean(r.nrp_driver).toLowerCase(), emailKey=normEmail(r.email), nameKey=clean(r.nama_driver).toLowerCase()
       if(!clean(r.nama_driver))error='nama_driver wajib'
       else if(!clean(r.nrp_driver))error='nrp_driver wajib'
+      else if(seenNrp.has(nrpKey))error='nrp_driver double di file import'
+      else if(nameKey && seenName.has(nameKey))error='nama driver double di file import'
+      else if(emailKey && seenEmail.has(emailKey))error='email double di file import'
+      else if(drivers.some(d=>clean(d.nrp_driver).toLowerCase()===nrpKey))error='nrp_driver sudah terdaftar'
+      else if(nameKey && drivers.some(d=>clean(d.nama_driver).toLowerCase()===nameKey))error='nama driver sudah terdaftar'
+      else if(emailKey && drivers.some(d=>normEmail(d.email)===emailKey))error='email sudah terdaftar'
       else if(isAdmin(work)&&!site)error='site_code tidak ditemukan'
+      seenNrp.add(nrpKey); if(emailKey) seenEmail.add(emailKey); if(nameKey) seenName.add(nameKey)
       return {row:i+2,site_code:isAdmin(work)?siteCode:work.sites?.site_code,nama_driver:clean(r.nama_driver),nrp_driver:clean(r.nrp_driver),email:normEmail(r.email),password:clean(r.password),vendor_name:vendorName,status:clean(r.status)||'Aktif',mulai_dinas:clean(r.mulai_dinas),end_masa_dinas:clean(r.end_masa_dinas),site_id:site?.id,vendor_id:vendor?.id,error}
     })
     setPreview(mapped)
@@ -186,7 +216,7 @@ function MasterDriver({profile,work}){
     const valid=preview.filter(r=>!r.error)
     if(valid.length!==preview.length)return setMsg('Masih ada baris invalid.')
     for(const r of valid){
-      if(r.email&&r.password) await createAuthUser(r.email,r.password,r.nama_driver)
+      if(r.email&&r.password) await createAuthUser({email:r.email,password:r.password,nama:r.nama_driver,nrp:r.nrp_driver,app_id:work.app_id||work.applications?.id,site_id:r.site_id,role:'Driver'})
       let vendorId=r.vendor_id
       if(r.vendor_name&&!vendorId){ const {data:v}=await supabase.from('vendors').insert({vendor_name:r.vendor_name,status:'Aktif'}).select().single(); vendorId=v?.id }
       await supabase.from('drivers').upsert({site_id:r.site_id,nama_driver:r.nama_driver,nrp_driver:r.nrp_driver,email:r.email||null,vendor_id:vendorId||null,status:r.status,mulai_dinas:r.mulai_dinas||null,end_masa_dinas:r.end_masa_dinas||null},{onConflict:'nrp_driver'})
@@ -194,21 +224,34 @@ function MasterDriver({profile,work}){
     setMsg(`Import berhasil ${valid.length} driver.`); setPreview([]); load()
   }
   const table=drivers.map(d=>({nama:d.nama_driver,nrp:d.nrp_driver,email:d.email||'-',site:d.sites?.site_code||'-',vendor:d.vendors?.vendor_name||'-',mulai_dinas:d.mulai_dinas||'-',end_masa_dinas:d.end_masa_dinas||'-',status_masa_dinas:isExpired(d.end_masa_dinas)?'Masa Dinas Habis':'Aktif',status:d.status}))
+  const DriverForm=({submitLabel,cancelLabel})=><form className="form-grid" onSubmit={save}>
+    {isAdmin(work)&&<label>Site<select required value={form.site_id} onChange={e=>setForm({...form,site_id:e.target.value})}><option value="">Pilih site</option>{sites.map(s=><option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}</select></label>}
+    <label>Nama Driver<input required value={form.nama_driver} onChange={e=>setForm({...form,nama_driver:e.target.value})}/></label>
+    <label>NRP<input required value={form.nrp_driver} onChange={e=>setForm({...form,nrp_driver:e.target.value})}/></label>
+    <label>Email<input type="email" name="driver_email_no_autofill" autoComplete="new-email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})}/></label>
+    <label>Password<input type="password" name="driver_password_no_autofill" autoComplete="new-password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder={editing?'Kosongkan jika tidak ubah akun':'Password awal'}/></label>
+    <label>Vendor<select value={form.vendor_id} onChange={e=>setForm({...form,vendor_id:e.target.value})}><option value="">Tanpa vendor</option>{vendors.map(v=><option key={v.id} value={v.id}>{v.vendor_name}</option>)}</select></label>
+    <label>Mulai Dinas<input type="date" value={form.mulai_dinas} onChange={e=>setForm({...form,mulai_dinas:e.target.value})}/></label>
+    <label>End Masa Dinas<input type="date" value={form.end_masa_dinas} onChange={e=>setForm({...form,end_masa_dinas:e.target.value})}/></label>
+    <label>Status<select value={form.status} onChange={e=>setForm({...form,status:e.target.value})}><option>Aktif</option><option>Nonaktif</option></select></label>
+    <button>{submitLabel}</button>{cancelLabel&&<button type="button" className="secondary" onClick={reset}>{cancelLabel}</button>}
+  </form>
   return <div className="stack">
-    <Panel title={editing?'Edit Master Driver DRD':'Master Driver DRD'} desc="Tambah/edit data driver dan masa dinas. Periode cuti dan tanggal onsite dikelola khusus melalui menu Periode Cuti.">
-      <form className="form-grid" onSubmit={save}>
-        {isAdmin(work)&&<label>Site<select required value={form.site_id} onChange={e=>setForm({...form,site_id:e.target.value})}><option value="">Pilih site</option>{sites.map(s=><option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}</select></label>}
-        <label>Nama Driver<input required value={form.nama_driver} onChange={e=>setForm({...form,nama_driver:e.target.value})}/></label>
-        <label>NRP<input required value={form.nrp_driver} onChange={e=>setForm({...form,nrp_driver:e.target.value})}/></label>
-        <label>Email<input value={form.email} onChange={e=>setForm({...form,email:e.target.value})}/></label>
-        <label>Password<input type="password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder={editing?'Kosongkan jika tidak ubah akun':'Password awal'}/></label>
-        <label>Vendor<select value={form.vendor_id} onChange={e=>setForm({...form,vendor_id:e.target.value})}><option value="">Tanpa vendor</option>{vendors.map(v=><option key={v.id} value={v.id}>{v.vendor_name}</option>)}</select></label>
-        <label>Mulai Dinas<input type="date" value={form.mulai_dinas} onChange={e=>setForm({...form,mulai_dinas:e.target.value})}/></label>
-        <label>End Masa Dinas<input type="date" value={form.end_masa_dinas} onChange={e=>setForm({...form,end_masa_dinas:e.target.value})}/></label>
-        <label>Status<select value={form.status} onChange={e=>setForm({...form,status:e.target.value})}><option>Aktif</option><option>Nonaktif</option></select></label>
-        <button>{editing?'Update Driver':'Simpan Driver + Akun'}</button>{editing&&<button type="button" className="secondary" onClick={reset}>Batal Edit</button>}
-      </form>{msg&&<p className="message">{msg}</p>}
+    <Panel title="Master Driver DRD" desc="Tambah driver baru dan masa dinas. Untuk mengubah data existing, klik Edit pada tabel agar form terbuka dalam modal.">
+      {!editing && <DriverForm submitLabel="Simpan Driver + Akun" />}
+      {editing && <p className="message">Sedang mengedit driver di modal. Tutup modal untuk kembali tambah driver baru.</p>}
+      {msg&&<p className="message">{msg}</p>}
     </Panel>
+    {modalOpen && <div className="modal-backdrop" onClick={reset}>
+      <div className="modal-card" onClick={e=>e.stopPropagation()}>
+        <div className="modal-head">
+          <div><h2>Edit Master Driver DRD</h2><p className="muted">Ubah data driver di sini agar tidak tercampur dengan form tambah driver.</p></div>
+          <button type="button" className="secondary small" onClick={reset}>Tutup</button>
+        </div>
+        <DriverForm submitLabel="Update Driver" cancelLabel="Batal Edit" />
+        {msg&&<p className="message">{msg}</p>}
+      </div>
+    </div>}
     <Panel title="Upload Bulk Master Driver DRD" desc="Template tidak memakai kode unik. Cukup isi site_code, nama_driver, nrp_driver, email/password bila perlu akun, vendor_name bila ada, serta tanggal masa dinas.">
       <div className="import-actions"><button className="secondary" onClick={()=>templateXlsx('template-master-driver-drd.xlsx',[{site_code:'BAYA',nama_driver:'Budi',nrp_driver:'D-001',email:'budi@company.co.id',password:'password123',vendor_name:'PBM',mulai_dinas:'2026-04-01',end_masa_dinas:'2026-05-01',status:'Aktif'}])}><Download size={16}/> Download Template Excel</button><label className="upload-line"><Upload size={16}/> Upload Excel<input type="file" accept=".xlsx,.xls" onChange={e=>previewFile(e.target.files?.[0])}/></label>{preview.length>0&&<button onClick={importRows}>Submit Import Valid</button>}</div>
       {preview.length>0&&<div className="upload-preview"><DataTable rows={preview}/></div>}
@@ -218,7 +261,6 @@ function MasterDriver({profile,work}){
     </Panel>
   </div>
 }
-
 function CutiPeriods({profile,work}){
   const [drivers,setDrivers]=useState([]), [periods,setPeriods]=useState([]), [form,setForm]=useState({driver_id:'',cuti_start_date:'',onsite_date:''}), [msg,setMsg]=useState(''), [modalOpen,setModalOpen]=useState(false)
   useEffect(()=>{load()},[work.id])
@@ -429,7 +471,7 @@ function AdminPanelDRD({profile,work}){
   async function saveMapping(e){
     e.preventDefault(); setLoading(true); setMsg('')
     try{
-      if(form.email && form.password) await createAuthUser(form.email,form.password,form.nama)
+      if(form.email && form.password) await createAuthUser({email:form.email,password:form.password,nama:form.nama,nrp:form.nrp,app_id:form.app_id||work.app_id||work.applications?.id,site_id:form.site_id,role:form.role})
       const profileRow=await upsertProfile(form)
       await ensureAccess(profileRow, form)
       setMsg('User dan mapping akses DRD berhasil disimpan.')
@@ -461,7 +503,7 @@ function AdminPanelDRD({profile,work}){
       const valid=preview.filter(r=>!r.error)
       if(valid.length!==preview.length) throw new Error('Masih ada baris invalid pada preview.')
       for(const r of valid){
-        if(r.email && r.password) await createAuthUser(r.email,r.password,r.nama)
+        if(r.email && r.password) await createAuthUser({email:r.email,password:r.password,nama:r.nama,nrp:r.nrp,app_id:work.app_id||work.applications?.id,site_id:r.site_id,role:r.role})
         const profileRow=await upsertProfile(r)
         await ensureAccess(profileRow, r)
       }
@@ -501,7 +543,7 @@ function AdminPanelDRD({profile,work}){
         <label>Nama<input required value={form.nama} onChange={e=>setForm({...form,nama:e.target.value})}/></label>
         <label>NRP<input value={form.nrp} onChange={e=>setForm({...form,nrp:e.target.value})}/></label>
         <label>Email<input required type="email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})}/></label>
-        <label>Password<input type="password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="Isi jika ingin membuat/reset akun Auth"/></label>
+        <label>Password<input type="password" name="driver_password_no_autofill" autoComplete="new-password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="Isi jika ingin membuat/reset akun Auth"/></label>
         <label>Role<select value={form.role} onChange={e=>setForm({...form,role:e.target.value})}><option>Platform Admin</option><option>App Admin</option><option>GL</option><option>Atasan Site</option><option>Driver</option></select></label>
         <label>Site<select value={form.site_id} onChange={e=>setForm({...form,site_id:e.target.value})}><option value="">All Site / Head Office</option>{sites.map(s=><option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}</select></label>
         <button disabled={loading}>{loading?'Memproses...':'Simpan User & Mapping'}</button>

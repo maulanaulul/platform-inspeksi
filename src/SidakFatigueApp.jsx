@@ -5,7 +5,7 @@ import { compressImage } from './utils/imageCompress'
 import {
   AlertTriangle, BarChart3, Building2, CalendarCheck, CheckCircle2, ClipboardCheck,
   Database, Download, FileText, KeyRound, LayoutDashboard, LogOut, Menu,
-  ShieldCheck, Truck, Upload, Users, XCircle, Eye, Check, X, FileSpreadsheet
+  ShieldCheck, Truck, Upload, Users, XCircle, Eye, Check, X, FileSpreadsheet, Search
 } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import DrdDriverApp from './DrdDriverApp.jsx'
@@ -49,10 +49,23 @@ function normalizeRow(row){
   return out
 }
 function cleanText(v){ return String(v ?? '').trim() }
+function today(){ return new Date().toISOString().slice(0, 10) }
+function isExpired(date){ return !!date && String(date) < today() }
 function generatePassword(){ return `SRGS${Math.random().toString(36).slice(2,8).toUpperCase()}!` }
+async function createAuthUser({ email, password, nama, nrp, app_id, site_id, role='Driver' }){
+  if(!email || !password) return { ok:true, skipped:true }
+  const cleanEmail = cleanText(email).toLowerCase()
+  if(!cleanEmail.includes('@')) throw new Error('Email login driver tidak valid.')
+  if(String(password).length < 6) throw new Error('Password minimal 6 karakter.')
+  const { data, error } = await supabase.functions.invoke('admin-create-user', { body:{ email:cleanEmail, password, nama, nrp, app_id, role, site_id } })
+  if(error) throw new Error(error.message || 'Gagal membuat akun Auth driver')
+  if(data && data.ok === false) throw new Error(data.error || 'Gagal membuat akun Auth driver')
+  return data || { ok:true }
+}
+
 function templateRows(type){
   const examples = {
-    driver: [{ nama_driver:'Budi', nrp_driver:'D-001', email:'budi@company.co.id', vendor_name:'Vendor A', site_code:'BAYA', status:'Aktif' }],
+    driver: [{ nama_driver:'Budi', nrp_driver:'D-001', email:'budi@company.co.id', password:'password123', vendor_name:'Vendor A', site_code:'BAYA', status:'Aktif' }],
     vendor: [{ vendor_name:'Vendor A', status:'Aktif' }],
     site: [{ site_code:'BAYA', site_name:'BAYA', region:'Operation', status:'Aktif' }],
     plan: [{ site_code:'BAYA', nrp_driver:'D-001', bulan:5, tahun:2026, status:'Planned' }]
@@ -407,20 +420,35 @@ function SidakPage({ page, context, profile }) {
   return null
 }
 
+
+function DashboardDateFilter({ dateFrom, dateTo, setDateFrom, setDateTo, onClear }) {
+  return <Panel title="Filter Tanggal Dashboard" desc="KPI, achievement, chart, dan row data dashboard mengikuti rentang tanggal ini.">
+    <div className="form-grid">
+      <label>Dari Tanggal<input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} /></label>
+      <label>Sampai Tanggal<input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} /></label>
+      <button type="button" className="secondary" onClick={onClear}>Reset Filter</button>
+    </div>
+  </Panel>
+}
+
 function SidakDashboard({ context }) {
   const [plans, setPlans] = useState([])
   const [inspections, setInspections] = useState([])
   const [outs, setOuts] = useState([])
   const [loading, setLoading] = useState(true)
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
   const globalView = isHeadOfficeAdmin(context)
 
-  useEffect(() => { load() }, [context.id])
+  useEffect(() => { load() }, [context.id, dateFrom, dateTo])
   async function load() {
     setLoading(true)
-    let planQ = supabase.from('fatigue_plans').select('id, bulan, tahun, status, drivers(nama_driver,nrp_driver), sites(site_name,site_code)').order('created_at', { ascending: false })
+    let planQ = supabase.from('fatigue_plans').select('id, bulan, tahun, status, created_at, drivers(nama_driver,nrp_driver), sites(site_name,site_code)').order('created_at', { ascending: false })
     let inspQ = supabase.from('fatigue_inspections').select('id, tanggal_inspeksi, status, drivers(nama_driver,nrp_driver), sites(site_name,site_code)').order('created_at', { ascending: false })
-    let outQ = supabase.from('fatigue_outstandings').select('id, description, status, drivers(nama_driver,nrp_driver), sites(site_name,site_code), fatigue_parameters(parameter_name)').order('created_at', { ascending: false })
+    let outQ = supabase.from('fatigue_outstandings').select('id, description, status, created_at, drivers(nama_driver,nrp_driver), sites(site_name,site_code), fatigue_parameters(parameter_name)').order('created_at', { ascending: false })
     if (!globalView) { planQ = planQ.eq('site_id', context.site_id); inspQ = inspQ.eq('site_id', context.site_id); outQ = outQ.eq('site_id', context.site_id) }
+    if (dateFrom) { planQ = planQ.gte('created_at', dateFrom); inspQ = inspQ.gte('tanggal_inspeksi', dateFrom); outQ = outQ.gte('created_at', dateFrom) }
+    if (dateTo) { const end = dateTo + 'T23:59:59'; planQ = planQ.lte('created_at', end); inspQ = inspQ.lte('tanggal_inspeksi', dateTo); outQ = outQ.lte('created_at', end) }
     const [{ data: p }, { data: i }, { data: o }] = await Promise.all([planQ, inspQ, outQ])
     // JIEP adalah Head Office: admin JIEP melihat all site operation.
     // Data JIEP sendiri tetap tidak masuk KPI/chart operasional.
@@ -462,6 +490,7 @@ function SidakDashboard({ context }) {
   const closeApprovedRows = temuanRows.filter(r => r.status === 'Approved')
 
   return <div className="stack">
+    <DashboardDateFilter dateFrom={dateFrom} dateTo={dateTo} setDateFrom={setDateFrom} setDateTo={setDateTo} onClear={()=>{setDateFrom('');setDateTo('')}} />
     <div className="kpi-grid">
       <Kpi title="Plan Bulanan" value={plans.length} icon={<CalendarCheck/>} />
       <Kpi title="Aktual Approved" value={actual} icon={<ClipboardCheck/>} />
@@ -500,13 +529,16 @@ function DriverMaster({ context }) {
   const [drivers, setDrivers] = useState([])
   const [vendors, setVendors] = useState([])
   const [sites, setSites] = useState([])
-  const [editingId, setEditingId] = useState(null)
-  const [form, setForm] = useState({ nama_driver: '', nrp_driver: '', email: '', vendor_id: '', site_id: context.site_id, status: 'Aktif' })
-  const [message, setMessage] = useState('')
   const [preview, setPreview] = useState([])
+  const [message, setMessage] = useState('')
+  const [editingId, setEditingId] = useState(null)
+  const [modalOpen, setModalOpen] = useState(false)
   const adminHO = isHeadOfficeAdmin(context)
+  const emptyForm = { site_id: context.site_id || '', nama_driver: '', nrp_driver: '', email: '', password: '', vendor_id: '', status: 'Aktif', mulai_dinas: '', end_masa_dinas: '' }
+  const [form, setForm] = useState(emptyForm)
 
   useEffect(() => { load() }, [context.id])
+
   async function load() {
     let driverQ = supabase.from('drivers').select('*, vendors(vendor_code,vendor_name), sites(site_name,site_code)').order('created_at', { ascending: false })
     if (!adminHO) driverQ = driverQ.eq('site_id', context.site_id)
@@ -518,67 +550,126 @@ function DriverMaster({ context }) {
     setDrivers(d || [])
     setVendors(v || [])
     setSites(s || [])
+    setForm(f => ({ ...f, site_id: f.site_id || context.site_id || (s || [])[0]?.id || '' }))
   }
+
   function resetForm(){
     setEditingId(null)
-    setForm({ nama_driver: '', nrp_driver: '', email: '', vendor_id: '', site_id: context.site_id, status: 'Aktif' })
+    setModalOpen(false)
+    setForm({ ...emptyForm, site_id: context.site_id || '' })
   }
+
+  function editDriver(d){
+    setEditingId(d.id)
+    setForm({
+      site_id: d.site_id || context.site_id || '',
+      nama_driver: d.nama_driver || '',
+      nrp_driver: d.nrp_driver || '',
+      email: d.email || '',
+      password: '',
+      vendor_id: d.vendor_id || '',
+      status: d.status || 'Aktif',
+      mulai_dinas: d.mulai_dinas || '',
+      end_masa_dinas: d.end_masa_dinas || ''
+    })
+    setModalOpen(true)
+  }
+
+  function duplicateMessage(dup, nrpKey, emailKey, nameKey){
+    if (dup.nrp_driver && cleanText(dup.nrp_driver).toLowerCase() === nrpKey) return 'NRP driver sudah terdaftar.'
+    if (emailKey && cleanText(dup.email).toLowerCase() === emailKey) return 'Email driver sudah terdaftar.'
+    if (nameKey && cleanText(dup.nama_driver).toLowerCase() === nameKey) return 'Nama driver sudah terdaftar.'
+    return 'Data driver sudah terdaftar.'
+  }
+
   async function save(e) {
     e.preventDefault()
     setMessage('')
-    const payload = { ...form, site_id: adminHO ? form.site_id : context.site_id, status: form.status || 'Aktif' }
-    if (!payload.vendor_id) payload.vendor_id = null
-    if (editingId) {
-      const { error } = await supabase.from('drivers').update(payload).eq('id', editingId)
-      if (error) setMessage(error.message)
-      else { setMessage('Driver berhasil diupdate.'); resetForm(); load() }
-    } else {
-      const { error } = await supabase.from('drivers').insert(payload)
-      if (error) setMessage(error.message)
-      else { setMessage('Driver berhasil ditambahkan.'); resetForm(); load() }
+    const siteId = adminHO ? form.site_id : context.site_id
+    const nrpKey = cleanText(form.nrp_driver).toLowerCase()
+    const emailKey = cleanText(form.email).toLowerCase()
+    const nameKey = cleanText(form.nama_driver).toLowerCase()
+    const dup = drivers.find(d => String(d.id) !== String(editingId || '') && (
+      cleanText(d.nrp_driver).toLowerCase() === nrpKey ||
+      (emailKey && cleanText(d.email).toLowerCase() === emailKey) ||
+      (nameKey && cleanText(d.nama_driver).toLowerCase() === nameKey)
+    ))
+    if (dup) return setMessage(duplicateMessage(dup, nrpKey, emailKey, nameKey))
+    if (form.email && !form.email.includes('@')) return setMessage('Email login driver tidak valid.')
+    if (form.email && !form.password && !editingId) return setMessage('Password wajib diisi jika membuat akun login driver.')
+    if (form.password && String(form.password).length < 6) return setMessage('Password minimal 6 karakter.')
+
+    const payload = {
+      site_id: siteId,
+      nama_driver: cleanText(form.nama_driver),
+      nrp_driver: cleanText(form.nrp_driver),
+      email: cleanText(form.email).toLowerCase() || null,
+      vendor_id: form.vendor_id || null,
+      status: form.status || 'Aktif',
+      mulai_dinas: form.mulai_dinas || null,
+      end_masa_dinas: form.end_masa_dinas || null,
+      updated_at: new Date().toISOString()
     }
+    try {
+      if (form.email && form.password) await createAuthUser({ email: form.email, password: form.password, nama: form.nama_driver, nrp: form.nrp_driver, app_id: context.app_id || context.applications?.id, site_id: siteId, role: 'Driver' })
+      if (editingId) {
+        const { error } = await supabase.from('drivers').update(payload).eq('id', editingId)
+        if (error) throw error
+        setMessage(form.password ? 'Driver dan akun login berhasil diupdate.' : 'Driver berhasil diupdate.')
+      } else {
+        const { error } = await supabase.from('drivers').upsert(payload, { onConflict: 'nrp_driver' })
+        if (error) throw error
+        setMessage(form.password ? 'Driver dan akun login berhasil ditambahkan.' : 'Driver berhasil ditambahkan.')
+      }
+      resetForm(); load()
+    } catch (err) { setMessage(err.message || 'Gagal menyimpan driver.') }
   }
-  function editDriver(d){
-    setEditingId(d.id)
-    setForm({ nama_driver: d.nama_driver || '', nrp_driver: d.nrp_driver || '', email: d.email || '', vendor_id: d.vendor_id || '', site_id: d.site_id || context.site_id, status: d.status || 'Aktif' })
-    window.scrollTo({ top: 0, behavior: 'smooth' })
-  }
+
   async function toggleDriver(d){
     const next = d.status === 'Aktif' ? 'Nonaktif' : 'Aktif'
-    const { error } = await supabase.from('drivers').update({ status: next }).eq('id', d.id)
+    const { error } = await supabase.from('drivers').update({ status: next, updated_at: new Date().toISOString() }).eq('id', d.id)
     if (error) setMessage(error.message); else { setMessage(`Driver ${next}.`); load() }
   }
   async function deleteDriver(d){
-    if(!confirm('Delete driver '+d.nama_driver+'? Jika sudah punya histori, sistem akan menonaktifkan jika delete ditolak database.')) return
-    const { error } = await supabase.from('drivers').delete().eq('id', d.id)
-    if(error){
-      const res = await supabase.from('drivers').update({status:'Nonaktif'}).eq('id', d.id)
-      setMessage(res.error ? res.error.message : 'Driver punya histori, sehingga dinonaktifkan.')
-    } else setMessage('Driver berhasil dihapus.')
-    load()
+    if(!confirm('Delete/nonaktifkan driver '+d.nama_driver+'?')) return
+    const { error } = await supabase.from('drivers').update({ status:'Nonaktif', updated_at: new Date().toISOString() }).eq('id', d.id)
+    setMessage(error ? error.message : 'Driver dinonaktifkan.'); load()
   }
+
   async function previewDrivers(file){
     if(!file) return
     setMessage('')
     try{
       const rows = (await parseExcelOrCsv(file)).map(normalizeRow)
+      const seenNrp=new Set(), seenEmail=new Set(), seenName=new Set()
       const [{data:allSites},{data:allVendors}] = await Promise.all([supabase.from('sites').select('id,site_code'), supabase.from('vendors').select('id,vendor_name')])
       const mapped = rows.map((r,idx)=>{
         const siteCode = adminHO ? cleanText(r.site_code).toUpperCase() : context.sites?.site_code
         const vendorName = cleanText(r.vendor_name || r.vendor)
         const site=(allSites||[]).find(s=>s.site_code===siteCode)
         const vendor= vendorName ? (allVendors||[]).find(v=>cleanText(v.vendor_name).toLowerCase()===vendorName.toLowerCase()) : null
+        const nrpKey=cleanText(r.nrp_driver).toLowerCase(), emailKey=cleanText(r.email).toLowerCase(), nameKey=cleanText(r.nama_driver).toLowerCase()
         let error = ''
         if(!site) error = 'site_code tidak ditemukan'
         else if(!cleanText(r.nama_driver) || !cleanText(r.nrp_driver)) error = 'nama_driver dan nrp_driver wajib'
-        return { row:idx+2, nama_driver:cleanText(r.nama_driver), nrp_driver:cleanText(r.nrp_driver), email:cleanText(r.email), vendor_name:vendor?.vendor_name||vendorName, site_code:siteCode, status:cleanText(r.status)||'Aktif', site_id:site?.id, vendor_id:vendor?.id||null, error }
+        else if(cleanText(r.email) && !cleanText(r.email).includes('@')) error = 'email tidak valid'
+        else if(seenNrp.has(nrpKey)) error='nrp_driver double di file import'
+        else if(nameKey && seenName.has(nameKey)) error='nama_driver double di file import'
+        else if(emailKey && seenEmail.has(emailKey)) error='email double di file import'
+        else if(drivers.some(d=>cleanText(d.nrp_driver).toLowerCase()===nrpKey)) error='nrp_driver sudah terdaftar'
+        else if(nameKey && drivers.some(d=>cleanText(d.nama_driver).toLowerCase()===nameKey)) error='nama_driver sudah terdaftar'
+        else if(emailKey && drivers.some(d=>cleanText(d.email).toLowerCase()===emailKey)) error='email sudah terdaftar'
+        seenNrp.add(nrpKey); if(emailKey) seenEmail.add(emailKey); if(nameKey) seenName.add(nameKey)
+        return { row:idx+2, site_code:siteCode, nama_driver:cleanText(r.nama_driver), nrp_driver:cleanText(r.nrp_driver), email:emailKey, password:cleanText(r.password), vendor_name:vendor?.vendor_name||vendorName, mulai_dinas:cleanText(r.mulai_dinas), end_masa_dinas:cleanText(r.end_masa_dinas), status:cleanText(r.status)||'Aktif', site_id:site?.id, vendor_id:vendor?.id||null, error }
       })
       setPreview(mapped)
     }catch(e){ setMessage(e.message) }
   }
+
   async function submitDriverImport(){
     const valid = preview.filter(r=>!r.error)
     if(!valid.length) return setMessage('Tidak ada baris valid untuk diimport.')
+    if(valid.length !== preview.length) return setMessage('Masih ada baris invalid.')
     const payload = []
     for (const r of valid) {
       let vendorId = r.vendor_id || null
@@ -591,33 +682,61 @@ function DriverMaster({ context }) {
           vendorId = newVendor.id
         }
       }
-      payload.push({ nama_driver:r.nama_driver, nrp_driver:r.nrp_driver, email:r.email||null, site_id:r.site_id, vendor_id:vendorId, status:r.status })
+      if (r.email && r.password) await createAuthUser({ email:r.email, password:r.password, nama:r.nama_driver, nrp:r.nrp_driver, app_id:context.app_id || context.applications?.id, site_id:r.site_id, role:'Driver' })
+      payload.push({ nama_driver:r.nama_driver, nrp_driver:r.nrp_driver, email:r.email||null, site_id:r.site_id, vendor_id:vendorId, status:r.status, mulai_dinas:r.mulai_dinas||null, end_masa_dinas:r.end_masa_dinas||null, updated_at:new Date().toISOString() })
     }
     const {error}=await supabase.from('drivers').upsert(payload,{onConflict:'nrp_driver'})
     if(error) setMessage(error.message)
     else { setMessage(`Import driver berhasil: ${payload.length} baris. Kode vendor dibuat otomatis jika ada vendor baru.`); setPreview([]); load() }
   }
 
-  const rows = drivers.map(d => ({ driver: d.nama_driver, nrp: d.nrp_driver, email: d.email, vendor: d.vendors?.vendor_name || '-', site: d.sites?.site_name, status: d.status, aksi: '' }))
+  const rows = drivers.map(d => ({
+    nama: d.nama_driver,
+    nrp: d.nrp_driver,
+    email: d.email || '-',
+    site: d.sites?.site_code || d.sites?.site_name || '-',
+    vendor: d.vendors?.vendor_name || '-',
+    mulai_dinas: d.mulai_dinas || '-',
+    end_masa_dinas: d.end_masa_dinas || '-',
+    status_masa_dinas: isExpired(d.end_masa_dinas) ? 'Masa Dinas Habis' : 'Aktif',
+    status: d.status,
+    aksi: ''
+  }))
+
+  const DriverForm = ({ submitLabel, cancelLabel }) => <form className="form-grid" onSubmit={save} autoComplete="off">
+    {adminHO && <label>Site<select required value={form.site_id} onChange={e=>setForm({...form,site_id:e.target.value})}><option value="">Pilih site</option>{sites.map(s=><option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}</select></label>}
+    <label>Nama Driver<input required autoComplete="off" value={form.nama_driver} onChange={e=>setForm({...form,nama_driver:e.target.value})}/></label>
+    <label>NRP<input required autoComplete="off" value={form.nrp_driver} onChange={e=>setForm({...form,nrp_driver:e.target.value})}/></label>
+    <label>Email<input type="email" name="driver_email_no_autofill" autoComplete="new-email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})}/></label>
+    <label>Password<input type="password" name="driver_password_no_autofill" autoComplete="new-password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder={editingId?'Kosongkan jika tidak ubah akun':'Password awal'}/></label>
+    <label>Vendor<select value={form.vendor_id} onChange={e=>setForm({...form,vendor_id:e.target.value})}><option value="">Tanpa vendor</option>{vendors.map(v=><option key={v.id} value={v.id}>{v.vendor_name}</option>)}</select></label>
+    <label>Mulai Dinas<input type="date" value={form.mulai_dinas} onChange={e=>setForm({...form,mulai_dinas:e.target.value})}/></label>
+    <label>End Masa Dinas<input type="date" value={form.end_masa_dinas} onChange={e=>setForm({...form,end_masa_dinas:e.target.value})}/></label>
+    <label>Status<select value={form.status} onChange={e=>setForm({...form,status:e.target.value})}><option>Aktif</option><option>Nonaktif</option></select></label>
+    <button>{submitLabel}</button>{cancelLabel && <button type="button" className="secondary" onClick={resetForm}>{cancelLabel}</button>}
+  </form>
+
   return <div className="stack">
-    <Panel title={editingId ? 'Edit Master Driver' : 'Tambah Master Driver'} desc={adminHO ? 'Administrator JIEP dapat mengelola driver semua site.' : 'GL hanya dapat mengelola driver pada site yang sedang dipilih.'}>
-      <form className="form-grid" onSubmit={save}>
-        <label>Nama Driver<input required value={form.nama_driver} onChange={e=>setForm({...form, nama_driver:e.target.value})}/></label>
-        <label>NRP Driver<input required value={form.nrp_driver} onChange={e=>setForm({...form, nrp_driver:e.target.value})}/></label>
-        <label>Email Login Driver<input value={form.email} onChange={e=>setForm({...form, email:e.target.value})}/></label>
-        <label>Vendor<select value={form.vendor_id} onChange={e=>setForm({...form, vendor_id:e.target.value})}><option value="">Tanpa vendor</option>{vendors.map(v=><option key={v.id} value={v.id}>{v.vendor_name}</option>)}</select></label>
-        {adminHO && <label>Site<select required value={form.site_id} onChange={e=>setForm({...form, site_id:e.target.value})}>{sites.map(s=><option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}</select></label>}
-        <label>Status<select value={form.status} onChange={e=>setForm({...form,status:e.target.value})}><option>Aktif</option><option>Nonaktif</option></select></label>
-        <button>{editingId ? 'Update Driver' : 'Simpan Driver'}</button>
-        {editingId && <button type="button" className="secondary" onClick={resetForm}>Batal Edit</button>}
-      </form>
+    <Panel title="Master Driver" desc="Tambah driver baru dan masa dinas. Untuk mengubah data existing, klik Edit pada tabel agar form terbuka dalam modal.">
+      {!editingId && <DriverForm submitLabel="Simpan Driver + Akun" />}
+      {editingId && <p className="message">Sedang mengedit driver di modal. Tutup modal untuk kembali tambah driver baru.</p>}
       {message && <p className="message">{message}</p>}
     </Panel>
-    <Panel title="Import Driver Excel" desc="Download template .xlsx, isi data driver, upload, preview, lalu submit. Kode vendor tidak perlu diisi; vendor baru dibuat otomatis dari vendor_name.">
-      <div className="import-actions"><button className="secondary" onClick={()=>downloadTemplate('template-master-driver.xlsx', templateRows('driver'))}><Download size={16}/> Download Template Excel</button><label className="upload-line"><FileSpreadsheet/> Upload Excel<input type="file" accept=".xlsx,.xls" onChange={e=>previewDrivers(e.target.files?.[0])}/></label>{preview.length>0 && <button onClick={submitDriverImport} disabled={preview.some(r=>r.error)}>Submit Import Valid</button>}</div>
+    {modalOpen && <div className="modal-backdrop" onClick={resetForm}>
+      <div className="modal-card" onClick={e=>e.stopPropagation()}>
+        <div className="modal-head">
+          <div><h2>Edit Master Driver</h2><p className="muted">Ubah data driver di sini agar tidak tercampur dengan form tambah driver.</p></div>
+          <button type="button" className="secondary small" onClick={resetForm}>Tutup</button>
+        </div>
+        <DriverForm submitLabel="Update Driver" cancelLabel="Batal Edit" />
+        {message && <p className="message">{message}</p>}
+      </div>
+    </div>}
+    <Panel title="Import Driver Excel" desc="Template tidak memakai kode unik. Cukup isi site_code, nama_driver, nrp_driver, email/password bila perlu akun, vendor_name bila ada, serta tanggal masa dinas.">
+      <div className="import-actions"><button className="secondary" onClick={()=>downloadTemplate('template-master-driver.xlsx', [{site_code:'BAYA',nama_driver:'Budi',nrp_driver:'D-001',email:'budi@company.co.id',password:'password123',vendor_name:'PBM',mulai_dinas:'2026-04-01',end_masa_dinas:'2026-05-01',status:'Aktif'}])}><Download size={16}/> Download Template Excel</button><label className="upload-line"><FileSpreadsheet/> Upload Excel<input type="file" accept=".xlsx,.xls" onChange={e=>previewDrivers(e.target.files?.[0])}/></label>{preview.length>0 && <button onClick={submitDriverImport} disabled={preview.some(r=>r.error)}>Submit Import Valid</button>}</div>
       {preview.length>0 && <PreviewTable rows={preview}/>} 
     </Panel>
-    <Panel title="Row Data Master Driver" desc="Data dapat diedit dan dinonaktifkan tanpa menghapus histori inspeksi." action={<button onClick={()=>downloadXlsx('master-driver.xlsx', rows.map(({aksi,...r})=>r))}><Download size={16}/> Export Excel</button>}>
+    <Panel title="Row Data Master Driver" desc="Aksi edit/delete dibuat rapi dalam satu tabel. Delete akan mengubah status menjadi Nonaktif agar histori tetap aman." action={<button onClick={()=>downloadXlsx('master-driver.xlsx', rows.map(({aksi,...r})=>r))}><Download size={16}/> Export Excel</button>}>
       <DataTable rows={rows} customActions={(idx)=>{const d=drivers[idx]; return <div className="row-actions"><button className="secondary small" onClick={()=>editDriver(d)}>Edit</button><button className="secondary small" onClick={()=>toggleDriver(d)}>{d.status==='Aktif'?'Nonaktifkan':'Aktifkan'}</button><button className="danger small" onClick={()=>deleteDriver(d)}>Delete</button></div>}} />
     </Panel>
   </div>
@@ -1019,6 +1138,21 @@ function AdminPanel({ context, profile }) {
   </div>
 }
 
+function UserExistingSearch({ profiles, value, onPick }){
+  const [open, setOpen] = useState(false)
+  const [q, setQ] = useState('')
+  const selected = profiles.find(p => p.id === value)
+  const list = profiles.filter(p => `${p.nama || ''} ${p.email || ''} ${p.nrp || ''}`.toLowerCase().includes(q.toLowerCase())).slice(0, 50)
+  function choose(id){ onPick(id); setOpen(false); setQ('') }
+  return <label>User Existing
+    <div className="user-picker-field">
+      <button type="button" className="secondary user-picker-trigger" onClick={()=>setOpen(true)}>{selected ? `${selected.nama || selected.email} · ${selected.email || ''}${selected.nrp ? ' · ' + selected.nrp : ''}` : 'Cari dan pilih user existing'}</button>
+      {selected && <button type="button" className="ghost-btn small" onClick={()=>onPick('')}>Clear</button>}
+    </div>
+    {open && <div className="modal-backdrop" onMouseDown={()=>setOpen(false)}><div className="modal-card user-picker-modal" onMouseDown={e=>e.stopPropagation()}><div className="modal-head"><div><h3>Pilih User Existing</h3><p>Cari berdasarkan nama, email, atau NRP.</p></div><button type="button" className="secondary small" onClick={()=>setOpen(false)}>Tutup</button></div><div className="table-search"><Search size={16}/><input autoFocus placeholder="Ketik nama / email / NRP..." value={q} onChange={e=>setQ(e.target.value)} /></div><div className="user-picker-list">{list.map(p=><button type="button" key={p.id} onClick={()=>choose(p.id)}><b>{p.nama || p.email}</b><span>{p.email}{p.nrp ? ` · ${p.nrp}` : ''}</span></button>)}{!list.length && <p className="muted">User tidak ditemukan.</p>}</div></div></div>}
+  </label>
+}
+
 function AccessMapping({ context, profile }){
   const [profiles,setProfiles]=useState([])
   const [apps,setApps]=useState([])
@@ -1048,6 +1182,10 @@ function AccessMapping({ context, profile }){
   function normalizeEmail(v){ return cleanText(v).toLowerCase() }
   function resetNewUser(){ setNewUser({ nama:'', nrp:'', email:'', password:'', app_id:apps[0]?.id||'', role:'GL', site_id:sites[0]?.id||'' }) }
   function resetExisting(){ setExisting({ user_id:'', app_id:apps[0]?.id||'', role:'GL', site_id:sites[0]?.id||'' }); setEditing(null) }
+  function findProfileByEmail(email){ return profiles.find(p=>normalizeEmail(p.email)===normalizeEmail(email)) }
+  function findProfileByNrp(nrp){ const key=cleanText(nrp).toLowerCase(); return key ? profiles.find(p=>cleanText(p.nrp).toLowerCase()===key) : null }
+  function findProfileByName(nama){ const key=cleanText(nama).toLowerCase(); return key ? profiles.find(p=>cleanText(p.nama).toLowerCase()===key) : null }
+  function findAccessDuplicate(x, ignoreId=null){ return accessRows.find(r=>String(r.id)!==String(ignoreId||'') && String(r.user_id||r.users_profile?.id||'')===String(x.user_id||'') && String(r.app_id||r.applications?.id||'')===String(x.app_id||'') && String(r.role||'')===String(x.role||'') && String(r.site_id||r.sites?.id||'')===String(x.site_id||'')) }
   async function createUserWithMapping(e){
     e.preventDefault(); setMessage(''); setLoading(true)
     try{
@@ -1056,7 +1194,9 @@ function AccessMapping({ context, profile }){
       if(payload.email === normalizeEmail(profile?.email)) throw new Error('Email user baru tidak boleh sama dengan email admin yang sedang login. Pilih User Existing jika ingin menambah mapping untuk akun admin.')
       if(!payload.password || payload.password.length < 6) throw new Error('Password minimal 6 karakter')
       if(!payload.app_id || !payload.role) throw new Error('Aplikasi dan role wajib dipilih')
-      console.log('CREATE USER PAYLOAD:', payload)
+      if(findProfileByEmail(payload.email)) throw new Error('Email sudah terdaftar. Silahkan mapping pada User Existing.')
+      if(payload.nrp && findProfileByNrp(payload.nrp)) throw new Error('NRP sudah terdaftar. Silahkan mapping pada User Existing.')
+      if(cleanText(newUser.nama) && findProfileByName(newUser.nama)) throw new Error('Nama user sudah terdaftar. Silahkan mapping pada User Existing.')
       const { data, error } = await supabase.functions.invoke('admin-create-user', { body: payload })
       if(error) throw error
       if(data?.error) throw new Error(data.error)
@@ -1071,6 +1211,7 @@ function AccessMapping({ context, profile }){
       if(!existing.user_id) throw new Error('Pilih user existing terlebih dahulu')
       if(!existing.app_id || !existing.role) throw new Error('Aplikasi dan role wajib dipilih')
       const payload={ user_id:existing.user_id, app_id:existing.app_id, role:existing.role, site_id:existing.site_id || null, status:'Aktif' }
+      if(findAccessDuplicate(payload, editing?.id)) throw new Error('Mapping akses ini sudah ada. User, aplikasi, role, dan site tidak boleh double.')
       let error
       if(editing){ ({ error } = await supabase.from('user_app_access').update(payload).eq('id',editing.id)) }
       else { ({ error } = await supabase.from('user_app_access').insert(payload)) }
@@ -1096,8 +1237,13 @@ function AccessMapping({ context, profile }){
         const app = apps.find(a => String(a.app_code||'').toLowerCase() === appCode || String(a.app_name||'').toLowerCase() === appCode)
         const site = siteCode ? sites.find(s => s.site_code === siteCode) : null
         const prof = profiles.find(p => normalizeEmail(p.email) === email)
+        const nrpProf = cleanText(r.nrp) ? findProfileByNrp(r.nrp) : null
+        const nameProf = cleanText(r.nama) ? findProfileByName(r.nama) : null
         let error = ''
         if(!email) error = 'email wajib'
+        else if(prof) error = 'email sudah terdaftar. Silahkan mapping pada User Existing.'
+        else if(nrpProf) error = 'NRP sudah terdaftar. Silahkan mapping pada User Existing.'
+        else if(nameProf) error = 'nama sudah terdaftar. Silahkan mapping pada User Existing.'
         else if(!app) error = 'app_code tidak ditemukan'
         else if(!role) error = 'role wajib'
         else if(siteCode && !site) error = 'site_code tidak ditemukan'
@@ -1116,6 +1262,9 @@ function AccessMapping({ context, profile }){
           const { error } = await supabase.from('user_app_access').insert({ user_id:r.user_id, app_id:r.app_id, role:r.role, site_id:r.site_id, status:'Aktif' })
           if(error) throw error
         } else {
+          if(findProfileByEmail(r.email)) throw new Error('email sudah terdaftar. Silahkan mapping pada User Existing.')
+          if(r.nrp && findProfileByNrp(r.nrp)) throw new Error('NRP sudah terdaftar. Silahkan mapping pada User Existing.')
+          if(r.nama && findProfileByName(r.nama)) throw new Error('nama sudah terdaftar. Silahkan mapping pada User Existing.')
           const { data, error } = await supabase.functions.invoke('admin-create-user', { body:{ nama:r.nama, nrp:r.nrp, email:r.email, password:r.password, app_id:r.app_id, role:r.role, site_id:r.site_id } })
           if(error) throw error
           if(data?.error) throw new Error(data.error)
@@ -1135,8 +1284,8 @@ function AccessMapping({ context, profile }){
   const rows=accessRows.map(r=>({ user:r.users_profile?.nama, email:r.users_profile?.email, app:r.applications?.app_name, role:r.role, site:r.sites?.site_name || 'All Site', status:r.status, aksi:'' }))
   const roles=['Platform Admin','App Admin','GL','Atasan Site','Driver','Viewer']
   return <div className="stack">
-    <Panel title="Buat User Baru + Mapping Akses" desc="Form ini membuat akun Auth baru, profile, dan mapping akses sekaligus. Email tidak boleh sama dengan email admin yang sedang login."><form className="form-grid" onSubmit={createUserWithMapping}><label>Nama<input value={newUser.nama} onChange={e=>setNewUser({...newUser,nama:e.target.value})}/></label><label>NRP<input value={newUser.nrp} onChange={e=>setNewUser({...newUser,nrp:e.target.value})}/></label><label>Email User Baru<input type="email" value={newUser.email} onChange={e=>setNewUser({...newUser,email:e.target.value})}/></label><label>Password<input type="password" placeholder="Minimal 6 karakter" value={newUser.password} onChange={e=>setNewUser({...newUser,password:e.target.value})}/></label><label>Aplikasi<select value={newUser.app_id} onChange={e=>setNewUser({...newUser,app_id:e.target.value})}>{apps.map(a=><option key={a.id} value={a.id}>{a.app_name}</option>)}</select></label><label>Role<select value={newUser.role} onChange={e=>setNewUser({...newUser,role:e.target.value})}>{roles.map(r=><option key={r}>{r}</option>)}</select></label><label>Site<select value={newUser.site_id} onChange={e=>setNewUser({...newUser,site_id:e.target.value})}>{sites.map(s=><option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}</select></label><button disabled={loading}>{loading?'Memproses...':'Buat User Baru'}</button></form></Panel>
-    <Panel title={editing?'Edit Mapping User Existing':'Tambah Mapping User Existing'} desc="Gunakan section ini untuk menambah role/site/aplikasi pada user yang sudah ada. Tidak membuat password baru."><form className="form-grid" onSubmit={saveExistingMapping}><label>User Existing<select value={existing.user_id} onChange={e=>setExisting({...existing,user_id:e.target.value})}><option value="">Pilih user existing</option>{profiles.map(p=><option key={p.id} value={p.id}>{p.nama} · {p.email}</option>)}</select></label><label>Aplikasi<select value={existing.app_id} onChange={e=>setExisting({...existing,app_id:e.target.value})}>{apps.map(a=><option key={a.id} value={a.id}>{a.app_name}</option>)}</select></label><label>Role<select value={existing.role} onChange={e=>setExisting({...existing,role:e.target.value})}>{roles.map(r=><option key={r}>{r}</option>)}</select></label><label>Site<select value={existing.site_id} onChange={e=>setExisting({...existing,site_id:e.target.value})}>{sites.map(s=><option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}</select></label><button disabled={loading}>{editing?'Update Mapping':'Simpan Mapping'}</button>{editing && <button type="button" className="secondary" onClick={resetExisting}>Batal Edit</button>}</form>{message && <p className="message">{message}</p>}<p className="muted">Pembuatan password memakai Supabase Edge Function <code>admin-create-user</code>. Setelah update function, deploy ulang dengan <code>supabase functions deploy admin-create-user</code>.</p></Panel>
+    <Panel title="Buat User Baru + Mapping Akses" desc="Form ini membuat akun Auth baru, profile, dan mapping akses sekaligus. Email tidak boleh sama dengan email admin yang sedang login."><form className="form-grid" onSubmit={createUserWithMapping} autoComplete="off"><label>Nama<input autoComplete="off" value={newUser.nama} onChange={e=>setNewUser({...newUser,nama:e.target.value})}/></label><label>NRP<input autoComplete="off" value={newUser.nrp} onChange={e=>setNewUser({...newUser,nrp:e.target.value})}/></label><label>Email User Baru<input type="email" name="new_user_email_no_autofill" autoComplete="new-email" value={newUser.email} onChange={e=>setNewUser({...newUser,email:e.target.value})}/></label><label>Password<input type="password" name="new_user_password_no_autofill" autoComplete="new-password" placeholder="Minimal 6 karakter" value={newUser.password} onChange={e=>setNewUser({...newUser,password:e.target.value})}/></label><label>Aplikasi<select value={newUser.app_id} onChange={e=>setNewUser({...newUser,app_id:e.target.value})}>{apps.map(a=><option key={a.id} value={a.id}>{a.app_name}</option>)}</select></label><label>Role<select value={newUser.role} onChange={e=>setNewUser({...newUser,role:e.target.value})}>{roles.map(r=><option key={r}>{r}</option>)}</select></label><label>Site<select value={newUser.site_id} onChange={e=>setNewUser({...newUser,site_id:e.target.value})}>{sites.map(s=><option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}</select></label><button disabled={loading}>{loading?'Memproses...':'Buat User Baru'}</button></form></Panel>
+    <Panel title={editing?'Edit Mapping User Existing':'Tambah Mapping User Existing'} desc="Gunakan section ini untuk menambah role/site/aplikasi pada user yang sudah ada. Tidak membuat password baru."><form className="form-grid" onSubmit={saveExistingMapping}><UserExistingSearch profiles={profiles} value={existing.user_id} onPick={id=>setExisting({...existing,user_id:id})}/><label>Aplikasi<select value={existing.app_id} onChange={e=>setExisting({...existing,app_id:e.target.value})}>{apps.map(a=><option key={a.id} value={a.id}>{a.app_name}</option>)}</select></label><label>Role<select value={existing.role} onChange={e=>setExisting({...existing,role:e.target.value})}>{roles.map(r=><option key={r}>{r}</option>)}</select></label><label>Site<select value={existing.site_id} onChange={e=>setExisting({...existing,site_id:e.target.value})}>{sites.map(s=><option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}</select></label><button disabled={loading}>{editing?'Update Mapping':'Simpan Mapping'}</button>{editing && <button type="button" className="secondary" onClick={resetExisting}>Batal Edit</button>}</form>{message && <p className="message">{message}</p>}<p className="muted">Pembuatan password memakai Supabase Edge Function <code>admin-create-user</code>. Setelah update function, deploy ulang dengan <code>supabase functions deploy admin-create-user</code>.</p></Panel>
     <Panel title="Upload Excel Mapping Akses" desc="Bulk upload user dan mapping. Jika email sudah ada, sistem menambah mapping. Jika belum ada, sistem membuat akun via Edge Function."><div className="import-actions"><button className="secondary" onClick={downloadAccessTemplate}><Download size={16}/> Download Template</button><label className="upload-line"><FileSpreadsheet/> Upload Excel<input type="file" accept=".xlsx,.xls" onChange={e=>previewAccessUpload(e.target.files?.[0])}/></label>{bulkPreview.length>0 && <button disabled={loading || bulkPreview.some(r=>r.error)} onClick={submitAccessUpload}>Submit Import Valid</button>}</div>{bulkPreview.length>0 && <PreviewTable rows={bulkPreview.map(({app_id,site_id,user_id,password,...r})=>({...r,status_validasi:r.error ? 'ERROR: '+r.error : 'VALID'}))}/>}</Panel>
     <Panel title="Row Data Mapping Akses" desc="Akses bisa diedit, dihapus, atau diaktif/nonaktifkan. User dengan beberapa site/role akan memilih kombinasi saat login." action={<button onClick={()=>downloadXlsx('mapping-akses.xlsx', rows)}><Download size={16}/> Export Excel</button>}><DataTable rows={rows} customActions={(idx)=>{const r=accessRows[idx]; return <div className="row-actions"><button className="secondary" onClick={()=>editAccess(r)}>Edit</button><button className="secondary" onClick={()=>toggleAccess(r)}>{r.status==='Aktif'?'Nonaktifkan':'Aktifkan'}</button><button className="secondary danger" onClick={()=>deleteAccess(r)}>Hapus</button></div>}} /></Panel>
   </div>
@@ -1169,11 +1318,14 @@ function StatusPill({ value }) {
   const amber = ['Planned','Draft','Submitted','Closed','Belum Test','Proses'].includes(value)
   return <span className={`pill ${red?'red':green?'green':amber?'amber':'blue'}`}>{value}</span>
 }
-function DataTable({ rows, customActions }) {
+function DataTable({ rows, customActions, actions }) {
+  const [q, setQ] = useState('')
   if (!rows || rows.length === 0) return <p className="muted">Belum ada data.</p>
   const headers = Object.keys(rows[0])
-  return <div className="table-wrap"><table><thead><tr>{headers.map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{rows.map((r,i)=><tr key={i}>{headers.map(h=><td key={h}>{h === 'aksi' && customActions ? customActions(i) : String(r[h] ?? '')}</td>)}</tr>)}</tbody></table></div>
+  const filtered = rows.filter(r => !q || Object.values(r).some(v => String(v ?? '').toLowerCase().includes(q.toLowerCase())))
+  return <div className="data-table-block"><div className="table-search"><Search size={16}/><input placeholder="Search row data..." value={q} onChange={e=>setQ(e.target.value)} /></div><div className="table-wrap"><table><thead><tr>{headers.map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{filtered.map((r,i)=>{ const originalIdx = rows.indexOf(r); return <tr key={i}>{headers.map(h=><td key={h}>{h === 'aksi' && customActions ? customActions(originalIdx) : String(r[h] ?? '')}</td>)}</tr>})}</tbody></table></div>{filtered.length===0&&<p className="muted">Tidak ada data sesuai pencarian.</p>}</div>
 }
+
 function FullCenter({ text, action }) { return <div className="full-center"><ShieldCheck size={42}/><h2>{text}</h2>{action}</div> }
 
 export default App
