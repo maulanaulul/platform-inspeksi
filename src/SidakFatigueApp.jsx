@@ -703,7 +703,7 @@ function DriverMaster({ context }) {
     aksi: ''
   }))
 
-  const DriverForm = ({ submitLabel, cancelLabel }) => <form className="form-grid" onSubmit={save} autoComplete="off">
+  const renderDriverForm = ({ submitLabel, cancelLabel }) => <form className="form-grid" onSubmit={save} autoComplete="off">
     {adminHO && <label>Site<select required value={form.site_id} onChange={e=>setForm({...form,site_id:e.target.value})}><option value="">Pilih site</option>{sites.map(s=><option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}</select></label>}
     <label>Nama Driver<input required autoComplete="off" value={form.nama_driver} onChange={e=>setForm({...form,nama_driver:e.target.value})}/></label>
     <label>NRP<input required autoComplete="off" value={form.nrp_driver} onChange={e=>setForm({...form,nrp_driver:e.target.value})}/></label>
@@ -718,7 +718,7 @@ function DriverMaster({ context }) {
 
   return <div className="stack">
     <Panel title="Master Driver" desc="Tambah driver baru dan masa dinas. Untuk mengubah data existing, klik Edit pada tabel agar form terbuka dalam modal.">
-      {!editingId && <DriverForm submitLabel="Simpan Driver + Akun" />}
+      {!editingId && renderDriverForm({ submitLabel: "Simpan Driver + Akun" })}
       {editingId && <p className="message">Sedang mengedit driver di modal. Tutup modal untuk kembali tambah driver baru.</p>}
       {message && <p className="message">{message}</p>}
     </Panel>
@@ -728,7 +728,7 @@ function DriverMaster({ context }) {
           <div><h2>Edit Master Driver</h2><p className="muted">Ubah data driver di sini agar tidak tercampur dengan form tambah driver.</p></div>
           <button type="button" className="secondary small" onClick={resetForm}>Tutup</button>
         </div>
-        <DriverForm submitLabel="Update Driver" cancelLabel="Batal Edit" />
+        {renderDriverForm({ submitLabel: "Update Driver", cancelLabel: "Batal Edit" })}
         {message && <p className="message">{message}</p>}
       </div>
     </div>}

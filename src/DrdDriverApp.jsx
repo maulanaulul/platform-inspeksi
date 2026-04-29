@@ -224,7 +224,7 @@ function MasterDriver({profile,work}){
     setMsg(`Import berhasil ${valid.length} driver.`); setPreview([]); load()
   }
   const table=drivers.map(d=>({nama:d.nama_driver,nrp:d.nrp_driver,email:d.email||'-',site:d.sites?.site_code||'-',vendor:d.vendors?.vendor_name||'-',mulai_dinas:d.mulai_dinas||'-',end_masa_dinas:d.end_masa_dinas||'-',status_masa_dinas:isExpired(d.end_masa_dinas)?'Masa Dinas Habis':'Aktif',status:d.status}))
-  const DriverForm=({submitLabel,cancelLabel})=><form className="form-grid" onSubmit={save}>
+  const renderDriverForm = (submitLabel, cancelLabel = null) => <form className="form-grid" onSubmit={save} autoComplete="off">
     {isAdmin(work)&&<label>Site<select required value={form.site_id} onChange={e=>setForm({...form,site_id:e.target.value})}><option value="">Pilih site</option>{sites.map(s=><option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}</select></label>}
     <label>Nama Driver<input required value={form.nama_driver} onChange={e=>setForm({...form,nama_driver:e.target.value})}/></label>
     <label>NRP<input required value={form.nrp_driver} onChange={e=>setForm({...form,nrp_driver:e.target.value})}/></label>
@@ -238,7 +238,7 @@ function MasterDriver({profile,work}){
   </form>
   return <div className="stack">
     <Panel title="Master Driver DRD" desc="Tambah driver baru dan masa dinas. Untuk mengubah data existing, klik Edit pada tabel agar form terbuka dalam modal.">
-      {!editing && <DriverForm submitLabel="Simpan Driver + Akun" />}
+      {!editing && renderDriverForm("Simpan Driver + Akun")}
       {editing && <p className="message">Sedang mengedit driver di modal. Tutup modal untuk kembali tambah driver baru.</p>}
       {msg&&<p className="message">{msg}</p>}
     </Panel>
@@ -248,7 +248,7 @@ function MasterDriver({profile,work}){
           <div><h2>Edit Master Driver DRD</h2><p className="muted">Ubah data driver di sini agar tidak tercampur dengan form tambah driver.</p></div>
           <button type="button" className="secondary small" onClick={reset}>Tutup</button>
         </div>
-        <DriverForm submitLabel="Update Driver" cancelLabel="Batal Edit" />
+        {renderDriverForm("Update Driver", "Batal Edit")}
         {msg&&<p className="message">{msg}</p>}
       </div>
     </div>}
