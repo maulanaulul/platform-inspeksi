@@ -718,7 +718,7 @@ function DriverMaster({ context }) {
 
   return <div className="stack">
     <Panel title="Master Driver" desc="Tambah driver baru dan masa dinas. Untuk mengubah data existing, klik Edit pada tabel agar form terbuka dalam modal.">
-      {!editingId && renderDriverForm({ submitLabel: "Simpan Driver + Akun" })}
+      {!editingId && renderDriverForm({ submitLabel: 'Simpan Driver + Akun' })}
       {editingId && <p className="message">Sedang mengedit driver di modal. Tutup modal untuk kembali tambah driver baru.</p>}
       {message && <p className="message">{message}</p>}
     </Panel>
@@ -728,7 +728,7 @@ function DriverMaster({ context }) {
           <div><h2>Edit Master Driver</h2><p className="muted">Ubah data driver di sini agar tidak tercampur dengan form tambah driver.</p></div>
           <button type="button" className="secondary small" onClick={resetForm}>Tutup</button>
         </div>
-        {renderDriverForm({ submitLabel: "Update Driver", cancelLabel: "Batal Edit" })}
+        {renderDriverForm({ submitLabel: 'Update Driver', cancelLabel: 'Batal Edit' })}
         {message && <p className="message">{message}</p>}
       </div>
     </div>}
@@ -1164,6 +1164,7 @@ function AccessMapping({ context, profile }){
   const [existing,setExisting]=useState({ user_id:'', app_id:'', role:'GL', site_id:'' })
   const [editing,setEditing]=useState(null)
   const [bulkPreview,setBulkPreview]=useState([])
+  const [existingBulkPreview,setExistingBulkPreview]=useState([])
   useEffect(()=>{load()},[])
   async function load(){
     const [{data:p},{data:a},{data:s},{data:m}] = await Promise.all([
@@ -1222,33 +1223,46 @@ function AccessMapping({ context, profile }){
     finally{ setLoading(false) }
   }
   function downloadAccessTemplate(){
-    downloadXlsx('template-mapping-akses.xlsx', [{ nama:'Nama User', nrp:'NRP001', email:'user@company.co.id', password:'Password123', app_code:'sidak_fatigue', role:'GL', site_code:'BAYA', status:'Aktif' }])
+    downloadXlsx('template-bulk-mapping-user-existing.xlsx', [
+      { nama:'Nama User', nrp:'NRP001', email:'user@company.co.id', password:'password123', app_code:'sidak_fatigue', role:'GL', site_code:'BAYA', status:'Aktif' },
+      { nama:'Nama User', nrp:'NRP001', email:'user@company.co.id', password:'password123', app_code:'drd_driver', role:'GL', site_code:'BAYA', status:'Aktif' },
+      { nama:'Nama User', nrp:'NRP001', email:'user@company.co.id', password:'password123', app_code:'INSPEKSI', role:'GL', site_code:'BAYA', status:'Aktif' }
+    ])
   }
   async function previewAccessUpload(file){
     if(!file) return
     setMessage('')
     try{
       const raw = (await parseExcelOrCsv(file)).map(normalizeRow)
+      const seenMap = new Set()
       const mapped = raw.map((r,idx)=>{
         const email = normalizeEmail(r.email)
-        const appCode = cleanText(r.app_code || r.aplikasi).toLowerCase()
+        const nrp = cleanText(r.nrp)
+        const appCode = cleanText(r.app_code || r.aplikasi)
         const role = cleanText(r.role) || 'GL'
+        const hasPasswordColumn = cleanText(r.password)
         const siteCode = cleanText(r.site_code).toUpperCase()
-        const app = apps.find(a => String(a.app_code||'').toLowerCase() === appCode || String(a.app_name||'').toLowerCase() === appCode)
+        const app = apps.find(a => String(a.status||'').toLowerCase()==='aktif' && String(a.app_code||'').toLowerCase() === String(appCode).toLowerCase())
         const site = siteCode ? sites.find(s => s.site_code === siteCode) : null
         const prof = profiles.find(p => normalizeEmail(p.email) === email)
-        const nrpProf = cleanText(r.nrp) ? findProfileByNrp(r.nrp) : null
+        const nrpProf = nrp ? findProfileByNrp(nrp) : null
         const nameProf = cleanText(r.nama) ? findProfileByName(r.nama) : null
+        const userKey = prof?.id || email
+        const mapKey = [userKey, app?.id||appCode, role, site?.id||''].join('|')
         let error = ''
+        let mode = prof ? 'Mapping existing user' : 'Create user baru + mapping'
         if(!email) error = 'email wajib'
-        else if(prof) error = 'email sudah terdaftar. Silahkan mapping pada User Existing.'
-        else if(nrpProf) error = 'NRP sudah terdaftar. Silahkan mapping pada User Existing.'
-        else if(nameProf) error = 'nama sudah terdaftar. Silahkan mapping pada User Existing.'
-        else if(!app) error = 'app_code tidak ditemukan'
+        else if(!app) error = 'app_code tidak ditemukan / tidak aktif'
         else if(!role) error = 'role wajib'
         else if(siteCode && !site) error = 'site_code tidak ditemukan'
+        else if(seenMap.has(mapKey)) error = 'mapping akses double di file import'
+        else if(prof && nrpProf && nrpProf.id !== prof.id) error = 'NRP sudah dipakai email/user lain'
+        else if(prof && findAccessDuplicate({ user_id:prof.id, app_id:app.id, role, site_id:site?.id||null })) error = 'mapping akses sudah ada'
+        else if(!prof && nrpProf) error = 'NRP sudah terdaftar. Gunakan email user existing tersebut untuk bulk mapping.'
+        else if(!prof && nameProf) error = 'nama sudah terdaftar. Gunakan email user existing tersebut untuk bulk mapping.'
         else if(!prof && (!cleanText(r.password) || cleanText(r.password).length < 6)) error = 'user baru wajib password minimal 6 karakter'
-        return { row:idx+2, nama:cleanText(r.nama)||email, nrp:cleanText(r.nrp), email, password:cleanText(r.password), app_code:app?.app_code||appCode, app_id:app?.id, role, site_code:siteCode||'ALL', site_id:site?.id||null, user_id:prof?.id||null, status:cleanText(r.status)||'Aktif', error }
+        seenMap.add(mapKey)
+        return { row:idx+2, mode, nama:cleanText(r.nama)||prof?.nama||email, nrp:nrp || prof?.nrp || '', email, password:cleanText(r.password), app_code:app?.app_code||appCode, app_id:app?.id, role, site_code:siteCode||'ALL', site_id:site?.id||null, user_id:prof?.id||null, status:cleanText(r.status)||'Aktif', error }
       })
       setBulkPreview(mapped)
     }catch(e){ setMessage(e.message || String(e)) }
@@ -1259,6 +1273,7 @@ function AccessMapping({ context, profile }){
     for (const r of bulkPreview.filter(x=>!x.error)){
       try{
         if(r.user_id){
+          if(findAccessDuplicate({ user_id:r.user_id, app_id:r.app_id, role:r.role, site_id:r.site_id })) throw new Error('mapping akses sudah ada')
           const { error } = await supabase.from('user_app_access').insert({ user_id:r.user_id, app_id:r.app_id, role:r.role, site_id:r.site_id, status:'Aktif' })
           if(error) throw error
         } else {
@@ -1278,15 +1293,64 @@ function AccessMapping({ context, profile }){
     await load()
   }
 
+  async function previewExistingMappingUpload(file){
+    if(!file) return
+    setMessage('')
+    try{
+      const raw = (await parseExcelOrCsv(file)).map(normalizeRow)
+      const seenMap = new Set()
+      const mapped = raw.map((r,idx)=>{
+        const email = normalizeEmail(r.email)
+        const appCode = cleanText(r.app_code || r.aplikasi)
+        const role = cleanText(r.role) || 'GL'
+        const siteCode = cleanText(r.site_code).toUpperCase()
+        const app = apps.find(a => String(a.status||'').toLowerCase()==='aktif' && String(a.app_code||'').toLowerCase() === String(appCode).toLowerCase())
+        const site = siteCode ? sites.find(st => st.site_code === siteCode) : null
+        const prof = profiles.find(pr => normalizeEmail(pr.email) === email)
+        const mapKey = [prof?.id || email, app?.id || appCode, role, site?.id || ''].join('|')
+        let error = ''
+        if(!email) error = 'email wajib'
+        else if(hasPasswordColumn) error = 'Mapping user existing tidak membutuhkan password. Hapus isi/kolom password pada file ini.'
+        else if(!prof) error = 'email belum terdaftar. Gunakan Upload Excel User Mapping untuk membuat user baru.'
+        else if(!app) error = 'app_code tidak ditemukan / tidak aktif'
+        else if(!role) error = 'role wajib'
+        else if(siteCode && !site) error = 'site_code tidak ditemukan'
+        else if(seenMap.has(mapKey)) error = 'mapping akses double di file import'
+        else if(findAccessDuplicate({ user_id:prof.id, app_id:app.id, role, site_id:site?.id||null })) error = 'mapping akses sudah ada'
+        seenMap.add(mapKey)
+        return { row:idx+2, nama:prof?.nama || cleanText(r.nama) || email, nrp:prof?.nrp || cleanText(r.nrp) || '', email, app_code:app?.app_code||appCode, app_id:app?.id, role, site_code:siteCode||'ALL', site_id:site?.id||null, user_id:prof?.id||null, status:cleanText(r.status)||'Aktif', error }
+      })
+      setExistingBulkPreview(mapped)
+    }catch(e){ setMessage(e.message || String(e)) }
+  }
+  async function submitExistingMappingUpload(){
+    setLoading(true); setMessage('')
+    let ok = 0; const fail = []
+    for (const r of existingBulkPreview.filter(x=>!x.error)){
+      try{
+        if(!r.user_id) throw new Error('email belum terdaftar')
+        if(findAccessDuplicate({ user_id:r.user_id, app_id:r.app_id, role:r.role, site_id:r.site_id })) throw new Error('mapping akses sudah ada')
+        const { error } = await supabase.from('user_app_access').insert({ user_id:r.user_id, app_id:r.app_id, role:r.role, site_id:r.site_id, status:'Aktif' })
+        if(error) throw error
+        ok++
+      }catch(e){ fail.push('Baris '+r.row+': '+(e.message || e)) }
+    }
+    setLoading(false)
+    setMessage('Import mapping existing berhasil: '+ok+'. '+(fail.length ? fail.join(' | ') : ''))
+    if(!fail.length) setExistingBulkPreview([])
+    await load()
+  }
+
   async function toggleAccess(row){ const next=row.status==='Aktif'?'Nonaktif':'Aktif'; const {error}=await supabase.from('user_app_access').update({status:next}).eq('id',row.id); if(error)setMessage(error.message); else{setMessage(`Akses ${next}.`); load()} }
   async function deleteAccess(row){ if(!confirm('Hapus mapping akses ini?')) return; const {error}=await supabase.from('user_app_access').delete().eq('id',row.id); if(error)setMessage(error.message); else{setMessage('Mapping akses dihapus.'); load()} }
   function editAccess(row){ setEditing(row); setExisting({ user_id:row.user_id || row.users_profile?.id || '', app_id:row.app_id || row.applications?.id || '', role:row.role || 'GL', site_id:row.site_id || row.sites?.id || '' }); window.scrollTo({top:0,behavior:'smooth'}) }
-  const rows=accessRows.map(r=>({ user:r.users_profile?.nama, email:r.users_profile?.email, app:r.applications?.app_name, role:r.role, site:r.sites?.site_name || 'All Site', status:r.status, aksi:'' }))
+  const rows=accessRows.map(r=>({ user:r.users_profile?.nama, nrp:r.users_profile?.nrp || '-', email:r.users_profile?.email, app:r.applications?.app_name, role:r.role, site:r.sites?.site_name || 'All Site', status:r.status, aksi:'' }))
   const roles=['Platform Admin','App Admin','GL','Atasan Site','Driver','Viewer']
   return <div className="stack">
     <Panel title="Buat User Baru + Mapping Akses" desc="Form ini membuat akun Auth baru, profile, dan mapping akses sekaligus. Email tidak boleh sama dengan email admin yang sedang login."><form className="form-grid" onSubmit={createUserWithMapping} autoComplete="off"><label>Nama<input autoComplete="off" value={newUser.nama} onChange={e=>setNewUser({...newUser,nama:e.target.value})}/></label><label>NRP<input autoComplete="off" value={newUser.nrp} onChange={e=>setNewUser({...newUser,nrp:e.target.value})}/></label><label>Email User Baru<input type="email" name="new_user_email_no_autofill" autoComplete="new-email" value={newUser.email} onChange={e=>setNewUser({...newUser,email:e.target.value})}/></label><label>Password<input type="password" name="new_user_password_no_autofill" autoComplete="new-password" placeholder="Minimal 6 karakter" value={newUser.password} onChange={e=>setNewUser({...newUser,password:e.target.value})}/></label><label>Aplikasi<select value={newUser.app_id} onChange={e=>setNewUser({...newUser,app_id:e.target.value})}>{apps.map(a=><option key={a.id} value={a.id}>{a.app_name}</option>)}</select></label><label>Role<select value={newUser.role} onChange={e=>setNewUser({...newUser,role:e.target.value})}>{roles.map(r=><option key={r}>{r}</option>)}</select></label><label>Site<select value={newUser.site_id} onChange={e=>setNewUser({...newUser,site_id:e.target.value})}>{sites.map(s=><option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}</select></label><button disabled={loading}>{loading?'Memproses...':'Buat User Baru'}</button></form></Panel>
     <Panel title={editing?'Edit Mapping User Existing':'Tambah Mapping User Existing'} desc="Gunakan section ini untuk menambah role/site/aplikasi pada user yang sudah ada. Tidak membuat password baru."><form className="form-grid" onSubmit={saveExistingMapping}><UserExistingSearch profiles={profiles} value={existing.user_id} onPick={id=>setExisting({...existing,user_id:id})}/><label>Aplikasi<select value={existing.app_id} onChange={e=>setExisting({...existing,app_id:e.target.value})}>{apps.map(a=><option key={a.id} value={a.id}>{a.app_name}</option>)}</select></label><label>Role<select value={existing.role} onChange={e=>setExisting({...existing,role:e.target.value})}>{roles.map(r=><option key={r}>{r}</option>)}</select></label><label>Site<select value={existing.site_id} onChange={e=>setExisting({...existing,site_id:e.target.value})}>{sites.map(s=><option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}</select></label><button disabled={loading}>{editing?'Update Mapping':'Simpan Mapping'}</button>{editing && <button type="button" className="secondary" onClick={resetExisting}>Batal Edit</button>}</form>{message && <p className="message">{message}</p>}<p className="muted">Pembuatan password memakai Supabase Edge Function <code>admin-create-user</code>. Setelah update function, deploy ulang dengan <code>supabase functions deploy admin-create-user</code>.</p></Panel>
-    <Panel title="Upload Excel Mapping Akses" desc="Bulk upload user dan mapping. Jika email sudah ada, sistem menambah mapping. Jika belum ada, sistem membuat akun via Edge Function."><div className="import-actions"><button className="secondary" onClick={downloadAccessTemplate}><Download size={16}/> Download Template</button><label className="upload-line"><FileSpreadsheet/> Upload Excel<input type="file" accept=".xlsx,.xls" onChange={e=>previewAccessUpload(e.target.files?.[0])}/></label>{bulkPreview.length>0 && <button disabled={loading || bulkPreview.some(r=>r.error)} onClick={submitAccessUpload}>Submit Import Valid</button>}</div>{bulkPreview.length>0 && <PreviewTable rows={bulkPreview.map(({app_id,site_id,user_id,password,...r})=>({...r,status_validasi:r.error ? 'ERROR: '+r.error : 'VALID'}))}/>}</Panel>
+    <Panel title="Upload Excel User Mapping" desc="Upload untuk membuat user baru + mapping akses. Jika email sudah ada, sistem akan menambahkan mapping sesuai baris Excel."><div className="import-actions"><button className="secondary" onClick={downloadAccessTemplate}><Download size={16}/> Download Template</button><label className="upload-line"><FileSpreadsheet/> Upload Excel<input type="file" accept=".xlsx,.xls" onChange={e=>previewAccessUpload(e.target.files?.[0])}/></label>{bulkPreview.length>0 && <button disabled={loading || bulkPreview.some(r=>r.error)} onClick={submitAccessUpload}>Submit Import Valid</button>}</div>{bulkPreview.length>0 && <PreviewTable rows={bulkPreview.map(({app_id,site_id,user_id,password,...r})=>({...r,status_validasi:r.error ? 'ERROR: '+r.error : 'VALID'}))}/>}</Panel>
+    <Panel title="Upload Mapping User Existing" desc="Upload khusus untuk menambahkan mapping aplikasi/role/site kepada user yang sudah ada. Tidak membuat user Auth baru dan tidak memakai password."><div className="import-actions"><button className="secondary" onClick={()=>downloadXlsx('template-mapping-user-existing.xlsx',[{ nama:'Nama User', nrp:'NRP001', email:'user@company.co.id', app_code:'sidak_fatigue', role:'GL', site_code:'BAYA', status:'Aktif' },{ nama:'Nama User', nrp:'NRP001', email:'user@company.co.id', app_code:'drd_driver', role:'GL', site_code:'BAYA', status:'Aktif' },{ nama:'Nama User', nrp:'NRP001', email:'user@company.co.id', app_code:'INSPEKSI', role:'GL', site_code:'BAYA', status:'Aktif' }])}><Download size={16}/> Download Template Tanpa Password</button><label className="upload-line"><FileSpreadsheet/> Upload Excel<input type="file" accept=".xlsx,.xls" onChange={e=>previewExistingMappingUpload(e.target.files?.[0])}/></label>{existingBulkPreview.length>0 && <button disabled={loading || existingBulkPreview.some(r=>r.error)} onClick={submitExistingMappingUpload}>Submit Mapping Existing</button>}</div>{existingBulkPreview.length>0 && <PreviewTable rows={existingBulkPreview.map(({app_id,site_id,user_id,...r})=>({...r,status_validasi:r.error ? 'ERROR: '+r.error : 'VALID'}))}/>}</Panel>
     <Panel title="Row Data Mapping Akses" desc="Akses bisa diedit, dihapus, atau diaktif/nonaktifkan. User dengan beberapa site/role akan memilih kombinasi saat login." action={<button onClick={()=>downloadXlsx('mapping-akses.xlsx', rows)}><Download size={16}/> Export Excel</button>}><DataTable rows={rows} customActions={(idx)=>{const r=accessRows[idx]; return <div className="row-actions"><button className="secondary" onClick={()=>editAccess(r)}>Edit</button><button className="secondary" onClick={()=>toggleAccess(r)}>{r.status==='Aktif'?'Nonaktifkan':'Aktifkan'}</button><button className="secondary danger" onClick={()=>deleteAccess(r)}>Hapus</button></div>}} /></Panel>
   </div>
 }
