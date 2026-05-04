@@ -556,6 +556,8 @@ function DriverMaster({ context }) {
   const [message, setMessage] = useState('')
   const [editingId, setEditingId] = useState(null)
   const [modalOpen, setModalOpen] = useState(false)
+  const [driverImporting, setDriverImporting] = useState(false)
+  const [driverImportProgress, setDriverImportProgress] = useState({ current: 0, total: 0 })
   const adminHO = isHeadOfficeAdmin(context)
   const emptyForm = { site_id: context.site_id || '', nama_driver: '', nrp_driver: '', email: '', password: '', vendor_id: '', status: 'Aktif', mulai_dinas: '', end_masa_dinas: '' }
   const [form, setForm] = useState(emptyForm)
@@ -697,51 +699,60 @@ function DriverMaster({ context }) {
 
     const errors = []
     let successCount = 0
-    for (const [idx, r] of valid.entries()) {
-      try {
-        let vendorId = r.vendor_id || null
-        if (!vendorId && r.vendor_name) {
-          const { data: existingVendor, error: existingVendorErr } = await supabase.from('vendors').select('id').ilike('vendor_name', r.vendor_name).maybeSingle()
-          if (existingVendorErr) throw existingVendorErr
-          if (existingVendor?.id) vendorId = existingVendor.id
-          else {
-            const { data: newVendor, error: vendorErr } = await supabase.from('vendors').insert({ vendor_code: makeVendorCode(idx), vendor_name: r.vendor_name, status: 'Aktif' }).select('id').single()
-            if (vendorErr) throw vendorErr
-            vendorId = newVendor.id
+    setDriverImporting(true)
+    setDriverImportProgress({ current: 0, total: valid.length })
+    try {
+      for (const [idx, r] of valid.entries()) {
+        try {
+          let vendorId = r.vendor_id || null
+          if (!vendorId && r.vendor_name) {
+            const { data: existingVendor, error: existingVendorErr } = await supabase.from('vendors').select('id').ilike('vendor_name', r.vendor_name).maybeSingle()
+            if (existingVendorErr) throw existingVendorErr
+            if (existingVendor?.id) vendorId = existingVendor.id
+            else {
+              const { data: newVendor, error: vendorErr } = await supabase.from('vendors').insert({ vendor_code: makeVendorCode(idx), vendor_name: r.vendor_name, status: 'Aktif' }).select('id').single()
+              if (vendorErr) throw vendorErr
+              vendorId = newVendor.id
+            }
           }
-        }
-        const { error: driverErr } = await supabase.from('drivers').upsert({
-          nama_driver:r.nama_driver,
-          nrp_driver:r.nrp_driver,
-          email:r.email||null,
-          site_id:r.site_id,
-          vendor_id:vendorId,
-          status:r.status,
-          mulai_dinas:r.mulai_dinas||null,
-          end_masa_dinas:r.end_masa_dinas||null,
-          updated_at:new Date().toISOString()
-        }, { onConflict:'nrp_driver' })
-        if (driverErr) throw driverErr
-        successCount += 1
-        if (r.email && r.password) {
-          try {
-            await createAuthUser({ email:r.email, password:r.password, nama:r.nama_driver, nrp:r.nrp_driver, app_id:context.app_id || context.applications?.id, site_id:r.site_id, role:'Driver' })
-          } catch (authErr) {
-            errors.push(`Baris ${r.row}: data driver tersimpan, tapi akun login gagal dibuat (${authErr.message || String(authErr)})`)
+          const { error: driverErr } = await supabase.from('drivers').upsert({
+            nama_driver:r.nama_driver,
+            nrp_driver:r.nrp_driver,
+            email:r.email||null,
+            site_id:r.site_id,
+            vendor_id:vendorId,
+            status:r.status,
+            mulai_dinas:r.mulai_dinas||null,
+            end_masa_dinas:r.end_masa_dinas||null,
+            updated_at:new Date().toISOString()
+          }, { onConflict:'nrp_driver' })
+          if (driverErr) throw driverErr
+          successCount += 1
+          if (r.email && r.password) {
+            try {
+              await createAuthUser({ email:r.email, password:r.password, nama:r.nama_driver, nrp:r.nrp_driver, app_id:context.app_id || context.applications?.id, site_id:r.site_id, role:'Driver' })
+            } catch (authErr) {
+              errors.push(`Baris ${r.row}: data driver tersimpan, tapi akun login gagal dibuat (${authErr.message || String(authErr)})`)
+            }
           }
+        } catch (e) {
+          errors.push(`Baris ${r.row}: ${e.message || String(e)}`)
+        } finally {
+          setDriverImportProgress({ current: idx + 1, total: valid.length })
         }
-      } catch (e) {
-        errors.push(`Baris ${r.row}: ${e.message || String(e)}`)
       }
-    }
 
-    if(errors.length){
-      setMessage(`Import selesai: ${successCount} driver tersimpan. Catatan akun login: ${errors.slice(0,3).join(' | ')}`)
-      setPreview([]); loadAll(); return
+      if(errors.length){
+        setMessage(`Import selesai: ${successCount} driver tersimpan. Catatan akun login: ${errors.slice(0,3).join(' | ')}`)
+        setPreview([]); loadAll(); return
+      }
+      setMessage(`Import driver berhasil: ${successCount} baris. Kode vendor dibuat otomatis jika ada vendor baru.`)
+      setPreview([])
+      load()
+    } finally {
+      setDriverImporting(false)
+      setDriverImportProgress({ current: 0, total: 0 })
     }
-    setMessage(`Import driver berhasil: ${successCount} baris. Kode vendor dibuat otomatis jika ada vendor baru.`)
-    setPreview([])
-    load()
   }
 
   const rows = drivers.map(d => ({
@@ -787,7 +798,9 @@ function DriverMaster({ context }) {
       </div>
     </div>}
     <Panel title="Import Driver Excel" desc="Template tidak memakai kode unik. Cukup isi site_code, nama_driver, nrp_driver, email/password bila perlu akun, vendor_name bila ada, serta tanggal masa dinas.">
-      <div className="import-actions"><button className="secondary" onClick={()=>downloadTemplate('template-master-driver.xlsx', [{site_code:'BAYA',nama_driver:'Budi',nrp_driver:'D-001',email:'budi@company.co.id',password:'password123',vendor_name:'PBM',mulai_dinas:'2026-04-01',end_masa_dinas:'2026-05-01',status:'Aktif'}])}><Download size={16}/> Download Template Excel</button><label className="upload-line"><FileSpreadsheet/> Upload Excel<input type="file" accept=".xlsx,.xls" onChange={e=>previewDrivers(e.target.files?.[0])}/></label>{preview.length>0 && <button onClick={submitDriverImport} disabled={preview.some(r=>r.error)}>Submit Import Valid</button>}</div>
+      <style>{'@keyframes srgsSpin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}'}</style>
+      <div className="import-actions"><button className="secondary" disabled={driverImporting} onClick={()=>downloadTemplate('template-master-driver.xlsx', [{site_code:'BAYA',nama_driver:'Budi',nrp_driver:'D-001',email:'budi@company.co.id',password:'password123',vendor_name:'PBM',mulai_dinas:'2026-04-01',end_masa_dinas:'2026-05-01',status:'Aktif'}])}><Download size={16}/> Download Template Excel</button><label className="upload-line"><FileSpreadsheet/> Upload Excel<input type="file" accept=".xlsx,.xls" disabled={driverImporting} onChange={e=>previewDrivers(e.target.files?.[0])}/></label>{preview.length>0 && <button onClick={submitDriverImport} disabled={driverImporting || preview.some(r=>r.error)}>{driverImporting ? 'Mengimpor...' : 'Submit Import Valid'}</button>}</div>
+      {driverImporting && <div className="message" style={{display:'flex',alignItems:'center',gap:10}}><span aria-hidden="true" style={{width:16,height:16,border:'2px solid #bfdbfe',borderTopColor:'#2563eb',borderRadius:'50%',display:'inline-block',animation:'srgsSpin 0.8s linear infinite'}}/><span>Import sedang diproses... {driverImportProgress.current}/{driverImportProgress.total} baris. Mohon tunggu untuk file besar.</span></div>}
       {preview.length>0 && <PreviewTable rows={preview}/>} 
     </Panel>
     <Panel title="Row Data Master Driver" desc="Aksi edit/delete dibuat rapi dalam satu tabel. Delete akan mengubah status menjadi Nonaktif agar histori tetap aman." action={<button onClick={()=>downloadXlsx('master-driver.xlsx', rows.map(({aksi,...r})=>r))}><Download size={16}/> Export Excel</button>}>

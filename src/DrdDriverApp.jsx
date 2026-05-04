@@ -176,7 +176,7 @@ function InductionVideos(){
 }
 
 function MasterDriver({profile,work}){
-  const [drivers,setDrivers]=useState([]), [vendors,setVendors]=useState([]), [sites,setSites]=useState([]), [preview,setPreview]=useState([]), [msg,setMsg]=useState(''), [editing,setEditing]=useState(null), [modalOpen,setModalOpen]=useState(false)
+  const [drivers,setDrivers]=useState([]), [vendors,setVendors]=useState([]), [sites,setSites]=useState([]), [preview,setPreview]=useState([]), [msg,setMsg]=useState(''), [editing,setEditing]=useState(null), [modalOpen,setModalOpen]=useState(false), [importing,setImporting]=useState(false), [importProgress,setImportProgress]=useState({current:0,total:0})
   const emptyForm={site_id:work.site_id||'',nama_driver:'',nrp_driver:'',email:'',password:'',vendor_id:'',status:'Aktif',mulai_dinas:'',end_masa_dinas:''}
   const [form,setForm]=useState(emptyForm)
   useEffect(()=>{load()},[work.id])
@@ -246,32 +246,43 @@ function MasterDriver({profile,work}){
     const valid=preview.filter(r=>!r.error)
     if(valid.length!==preview.length)return setMsg('Masih ada baris invalid.')
     const errors=[]
-    for(const [i,r] of valid.entries()){
-      try{
-        let vendorId=r.vendor_id
-        if(r.vendor_name&&!vendorId){
-          const {data:v,error:vendorError}=await supabase.from('vendors').insert({vendor_code:makeVendorCode(i),vendor_name:r.vendor_name,status:'Aktif'}).select().single()
-          if(vendorError) throw vendorError
-          vendorId=v?.id
-        }
-        const {error:driverError}=await supabase.from('drivers').upsert({site_id:r.site_id,nama_driver:r.nama_driver,nrp_driver:r.nrp_driver,email:r.email||null,vendor_id:vendorId||null,status:r.status,mulai_dinas:r.mulai_dinas||null,end_masa_dinas:r.end_masa_dinas||null},{onConflict:'nrp_driver'})
-        if(driverError) throw driverError
-        if(r.email&&r.password){
-          try{
-            await createAuthUser({email:r.email,password:r.password,nama:r.nama_driver,nrp:r.nrp_driver,app_id:work.app_id||work.applications?.id,site_id:r.site_id,role:'Driver'})
-          }catch(authErr){
-            errors.push(`Baris ${r.row}: data driver tersimpan, tapi akun login gagal dibuat (${authErr.message||String(authErr)})`)
+    let successCount=0
+    setImporting(true)
+    setImportProgress({current:0,total:valid.length})
+    try{
+      for(const [i,r] of valid.entries()){
+        try{
+          let vendorId=r.vendor_id
+          if(r.vendor_name&&!vendorId){
+            const {data:v,error:vendorError}=await supabase.from('vendors').insert({vendor_code:makeVendorCode(i),vendor_name:r.vendor_name,status:'Aktif'}).select().single()
+            if(vendorError) throw vendorError
+            vendorId=v?.id
           }
+          const {error:driverError}=await supabase.from('drivers').upsert({site_id:r.site_id,nama_driver:r.nama_driver,nrp_driver:r.nrp_driver,email:r.email||null,vendor_id:vendorId||null,status:r.status,mulai_dinas:r.mulai_dinas||null,end_masa_dinas:r.end_masa_dinas||null},{onConflict:'nrp_driver'})
+          if(driverError) throw driverError
+          successCount += 1
+          if(r.email&&r.password){
+            try{
+              await createAuthUser({email:r.email,password:r.password,nama:r.nama_driver,nrp:r.nrp_driver,app_id:work.app_id||work.applications?.id,site_id:r.site_id,role:'Driver'})
+            }catch(authErr){
+              errors.push(`Baris ${r.row}: data driver tersimpan, tapi akun login gagal dibuat (${authErr.message||String(authErr)})`)
+            }
+          }
+        }catch(e){
+          errors.push(`Baris ${r.row}: ${e.message||String(e)}`)
+        }finally{
+          setImportProgress({current:i+1,total:valid.length})
         }
-      }catch(e){
-        errors.push(`Baris ${r.row}: ${e.message||String(e)}`)
       }
+      if(errors.length){
+        setMsg(`Import selesai: ${successCount} driver tersimpan. Catatan akun login: ${errors.slice(0,3).join(' | ')}`)
+        setPreview([]); load(); return
+      }
+      setMsg(`Import berhasil ${successCount} driver.`); setPreview([]); load()
+    } finally {
+      setImporting(false)
+      setImportProgress({current:0,total:0})
     }
-    if(errors.length){
-      setMsg(`Import selesai: ${valid.length} driver tersimpan. Catatan akun login: ${errors.slice(0,3).join(' | ')}`)
-      setPreview([]); load(); return
-    }
-    setMsg(`Import berhasil ${valid.length} driver.`); setPreview([]); load()
   }
   const table=drivers.map(d=>({nama:d.nama_driver,nrp:d.nrp_driver,email:d.email||'-',site:d.sites?.site_code||'-',vendor:d.vendors?.vendor_name||'-',mulai_dinas:d.mulai_dinas||'-',end_masa_dinas:d.end_masa_dinas||'-',status_masa_dinas:isExpired(d.end_masa_dinas)?'Masa Dinas Habis':'Aktif',status:d.status}))
   const renderDriverForm = (submitLabel, cancelLabel = null) => <form className="form-grid" onSubmit={save} autoComplete="off">
@@ -303,7 +314,9 @@ function MasterDriver({profile,work}){
       </div>
     </div>}
     <Panel title="Upload Bulk Master Driver DRD" desc="Template tidak memakai kode unik. Cukup isi site_code, nama_driver, nrp_driver, email/password bila perlu akun, vendor_name bila ada, serta tanggal masa dinas.">
-      <div className="import-actions"><button className="secondary" onClick={()=>templateXlsx('template-master-driver-drd.xlsx',[{site_code:'BAYA',nama_driver:'Budi',nrp_driver:'D-001',email:'budi@company.co.id',password:'password123',vendor_name:'PBM',mulai_dinas:'2026-04-01',end_masa_dinas:'2026-05-01',status:'Aktif'}])}><Download size={16}/> Download Template Excel</button><label className="upload-line"><Upload size={16}/> Upload Excel<input type="file" accept=".xlsx,.xls" onChange={e=>previewFile(e.target.files?.[0])}/></label>{preview.length>0&&<button onClick={importRows}>Submit Import Valid</button>}</div>
+      <style>{'@keyframes srgsSpin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}'}</style>
+      <div className="import-actions"><button className="secondary" disabled={importing} onClick={()=>templateXlsx('template-master-driver-drd.xlsx',[{site_code:'BAYA',nama_driver:'Budi',nrp_driver:'D-001',email:'budi@company.co.id',password:'password123',vendor_name:'PBM',mulai_dinas:'2026-04-01',end_masa_dinas:'2026-05-01',status:'Aktif'}])}><Download size={16}/> Download Template Excel</button><label className="upload-line"><Upload size={16}/> Upload Excel<input type="file" accept=".xlsx,.xls" disabled={importing} onChange={e=>previewFile(e.target.files?.[0])}/></label>{preview.length>0&&<button disabled={importing} onClick={importRows}>{importing?'Mengimpor...':'Submit Import Valid'}</button>}</div>
+      {importing&&<div className="message" style={{display:'flex',alignItems:'center',gap:10}}><span aria-hidden="true" style={{width:16,height:16,border:'2px solid #bfdbfe',borderTopColor:'#2563eb',borderRadius:'50%',display:'inline-block',animation:'srgsSpin 0.8s linear infinite'}}/><span>Import sedang diproses... {importProgress.current}/{importProgress.total} baris. Mohon tunggu untuk file besar.</span></div>}
       {preview.length>0&&<div className="upload-preview"><DataTable rows={preview}/></div>}
     </Panel>
     <Panel title="Row Data Driver" desc="Aksi edit/delete dibuat rapi dalam satu tabel. Delete akan mengubah status menjadi Nonaktif agar histori tetap aman." action={<button onClick={()=>exportXlsx('master-driver-drd.xlsx',table)}><Download size={16}/> Export</button>}>
