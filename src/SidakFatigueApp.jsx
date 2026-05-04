@@ -50,6 +50,19 @@ function normalizeRow(row){
 }
 function cleanText(v){ return String(v ?? '').trim() }
 function makeVendorCode(idx=0){ return `VEN-${Date.now().toString(36).toUpperCase()}-${String(idx+1).padStart(3,'0')}` }
+function excelDateToIso(v){
+  if(v === null || v === undefined || v === '') return ''
+  if(typeof v === 'number'){
+    const d = XLSX.SSF.parse_date_code(v)
+    if(d) return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`
+  }
+  const raw = cleanText(v)
+  if(!raw) return ''
+  if(/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw
+  const m = raw.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/)
+  if(m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`
+  return raw
+}
 function today(){ return new Date().toISOString().slice(0, 10) }
 function isExpired(date){ return !!date && String(date) < today() }
 function generatePassword(){ return `SRGS${Math.random().toString(36).slice(2,8).toUpperCase()}!` }
@@ -59,7 +72,16 @@ async function createAuthUser({ email, password, nama, nrp, app_id, site_id, rol
   if(!cleanEmail.includes('@')) throw new Error('Email login driver tidak valid.')
   if(String(password).length < 6) throw new Error('Password minimal 6 karakter.')
   const { data, error } = await supabase.functions.invoke('admin-create-user', { body:{ email:cleanEmail, password, nama, nrp, app_id, role, site_id } })
-  if(error) throw new Error(error.message || 'Gagal membuat akun Auth driver')
+  if(error){
+    let detail = error.message || 'Gagal membuat akun Auth driver'
+    try{
+      if(error.context && typeof error.context.json === 'function'){
+        const body = await error.context.json()
+        detail = body?.error || body?.message || detail
+      }
+    }catch(_){ }
+    throw new Error(detail)
+  }
   if(data && data.ok === false) throw new Error(data.error || 'Gagal membuat akun Auth driver')
   return data || { ok:true }
 }
@@ -661,34 +683,65 @@ function DriverMaster({ context }) {
         else if(nameKey && drivers.some(d=>cleanText(d.nama_driver).toLowerCase()===nameKey)) error='nama_driver sudah terdaftar'
         else if(emailKey && drivers.some(d=>cleanText(d.email).toLowerCase()===emailKey)) error='email sudah terdaftar'
         seenNrp.add(nrpKey); if(emailKey) seenEmail.add(emailKey); if(nameKey) seenName.add(nameKey)
-        return { row:idx+2, site_code:siteCode, nama_driver:cleanText(r.nama_driver), nrp_driver:cleanText(r.nrp_driver), email:emailKey, password:cleanText(r.password), vendor_name:vendor?.vendor_name||vendorName, mulai_dinas:cleanText(r.mulai_dinas), end_masa_dinas:cleanText(r.end_masa_dinas), status:cleanText(r.status)||'Aktif', site_id:site?.id, vendor_id:vendor?.id||null, error }
+        return { row:idx+2, site_code:siteCode, nama_driver:cleanText(r.nama_driver), nrp_driver:cleanText(r.nrp_driver), email:emailKey, password:cleanText(r.password), vendor_name:vendor?.vendor_name||vendorName, mulai_dinas:excelDateToIso(r.mulai_dinas), end_masa_dinas:excelDateToIso(r.end_masa_dinas), status:cleanText(r.status)||'Aktif', site_id:site?.id, vendor_id:vendor?.id||null, error }
       })
       setPreview(mapped)
     }catch(e){ setMessage(e.message) }
   }
 
   async function submitDriverImport(){
+    setMessage('')
     const valid = preview.filter(r=>!r.error)
     if(!valid.length) return setMessage('Tidak ada baris valid untuk diimport.')
     if(valid.length !== preview.length) return setMessage('Masih ada baris invalid.')
-    const payload = []
-    for (const r of valid) {
-      let vendorId = r.vendor_id || null
-      if (!vendorId && r.vendor_name) {
-        const { data: existingVendor } = await supabase.from('vendors').select('id').ilike('vendor_name', r.vendor_name).maybeSingle()
-        if (existingVendor?.id) vendorId = existingVendor.id
-        else {
-          const { data: newVendor, error: vendorErr } = await supabase.from('vendors').insert({ vendor_code: makeVendorCode(), vendor_name: r.vendor_name, status: 'Aktif' }).select('id').single()
-          if (vendorErr) return setMessage(vendorErr.message)
-          vendorId = newVendor.id
+
+    const errors = []
+    let successCount = 0
+    for (const [idx, r] of valid.entries()) {
+      try {
+        let vendorId = r.vendor_id || null
+        if (!vendorId && r.vendor_name) {
+          const { data: existingVendor, error: existingVendorErr } = await supabase.from('vendors').select('id').ilike('vendor_name', r.vendor_name).maybeSingle()
+          if (existingVendorErr) throw existingVendorErr
+          if (existingVendor?.id) vendorId = existingVendor.id
+          else {
+            const { data: newVendor, error: vendorErr } = await supabase.from('vendors').insert({ vendor_code: makeVendorCode(idx), vendor_name: r.vendor_name, status: 'Aktif' }).select('id').single()
+            if (vendorErr) throw vendorErr
+            vendorId = newVendor.id
+          }
         }
+        const { error: driverErr } = await supabase.from('drivers').upsert({
+          nama_driver:r.nama_driver,
+          nrp_driver:r.nrp_driver,
+          email:r.email||null,
+          site_id:r.site_id,
+          vendor_id:vendorId,
+          status:r.status,
+          mulai_dinas:r.mulai_dinas||null,
+          end_masa_dinas:r.end_masa_dinas||null,
+          updated_at:new Date().toISOString()
+        }, { onConflict:'nrp_driver' })
+        if (driverErr) throw driverErr
+        successCount += 1
+        if (r.email && r.password) {
+          try {
+            await createAuthUser({ email:r.email, password:r.password, nama:r.nama_driver, nrp:r.nrp_driver, app_id:context.app_id || context.applications?.id, site_id:r.site_id, role:'Driver' })
+          } catch (authErr) {
+            errors.push(`Baris ${r.row}: data driver tersimpan, tapi akun login gagal dibuat (${authErr.message || String(authErr)})`)
+          }
+        }
+      } catch (e) {
+        errors.push(`Baris ${r.row}: ${e.message || String(e)}`)
       }
-      if (r.email && r.password) await createAuthUser({ email:r.email, password:r.password, nama:r.nama_driver, nrp:r.nrp_driver, app_id:context.app_id || context.applications?.id, site_id:r.site_id, role:'Driver' })
-      payload.push({ nama_driver:r.nama_driver, nrp_driver:r.nrp_driver, email:r.email||null, site_id:r.site_id, vendor_id:vendorId, status:r.status, mulai_dinas:r.mulai_dinas||null, end_masa_dinas:r.end_masa_dinas||null, updated_at:new Date().toISOString() })
     }
-    const {error}=await supabase.from('drivers').upsert(payload,{onConflict:'nrp_driver'})
-    if(error) setMessage(error.message)
-    else { setMessage(`Import driver berhasil: ${payload.length} baris. Kode vendor dibuat otomatis jika ada vendor baru.`); setPreview([]); load() }
+
+    if(errors.length){
+      setMessage(`Import selesai: ${successCount} driver tersimpan. Catatan akun login: ${errors.slice(0,3).join(' | ')}`)
+      setPreview([]); loadAll(); return
+    }
+    setMessage(`Import driver berhasil: ${successCount} baris. Kode vendor dibuat otomatis jika ada vendor baru.`)
+    setPreview([])
+    load()
   }
 
   const rows = drivers.map(d => ({

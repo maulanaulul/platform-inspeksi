@@ -16,6 +16,19 @@ const QUESTION_CATEGORIES = ['DRD', 'Induksi Driver']
 
 function clean(v){ return String(v ?? '').trim() }
 function makeVendorCode(idx=0){ return `VEN-${Date.now().toString(36).toUpperCase()}-${String(idx+1).padStart(3,'0')}` }
+function excelDateToIso(v){
+  if(v === null || v === undefined || v === '') return ''
+  if(typeof v === 'number'){
+    const d = XLSX.SSF.parse_date_code(v)
+    if(d) return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`
+  }
+  const raw = clean(v)
+  if(!raw) return ''
+  if(/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw
+  const m = raw.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/)
+  if(m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`
+  return raw
+}
 function normEmail(v){ return clean(v).toLowerCase() }
 function today(){ return new Date().toISOString().slice(0,10) }
 function months(n){ const d = new Date(); d.setMonth(d.getMonth()+n); return d.toISOString().slice(0,10) }
@@ -28,7 +41,22 @@ function exportXlsx(name, rows){ const wb = XLSX.utils.book_new(); XLSX.utils.bo
 function templateXlsx(name, rows){ const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Template'); XLSX.writeFile(wb, name) }
 async function readExcel(file){ const buf = await file.arrayBuffer(); const wb = XLSX.read(buf,{type:'array'}); return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:''}) }
 function badge(s){ const v = String(s || '-'); const cls = v.includes('Lulus') || v.includes('Closed') || v.includes('Aktif') || v.includes('Sudah') ? 'b-green' : v.includes('Open') || v.includes('Habis') || v.includes('Expired') || v.includes('Wajib') ? 'b-red' : v.includes('Cuti') || v.includes('Belum') ? 'b-amber' : 'b-blue'; return <span className={`badge ${cls}`}>{v}</span> }
-async function createAuthUser({ email, password, nama, nrp, app_id, site_id, role='Driver' }){ if(!email || !password) return {ok:true,skipped:true}; const {data,error}=await supabase.functions.invoke('admin-create-user',{ body:{ email:normEmail(email), password, nama, nrp, app_id, role, site_id } }); if(error) throw new Error(error.message||'Gagal membuat akun Auth'); if(data && data.ok===false) throw new Error(data.error||'Gagal membuat akun Auth'); return data||{ok:true}; }
+async function createAuthUser({ email, password, nama, nrp, app_id, site_id, role='Driver' }){
+  if(!email || !password) return {ok:true,skipped:true}
+  const {data,error}=await supabase.functions.invoke('admin-create-user',{ body:{ email:normEmail(email), password, nama, nrp, app_id, role, site_id } })
+  if(error){
+    let detail = error.message || 'Gagal membuat akun Auth'
+    try{
+      if(error.context && typeof error.context.json === 'function'){
+        const body = await error.context.json()
+        detail = body?.error || body?.message || detail
+      }
+    }catch(_){ }
+    throw new Error(detail)
+  }
+  if(data && data.ok===false) throw new Error(data.error||'Gagal membuat akun Auth')
+  return data||{ok:true}
+}
 
 function App({ embeddedProfile=null, embeddedWork=null, onChangeApp=null } = {}){
   const [session,setSession]=useState(null), [profile,setProfile]=useState(null), [access,setAccess]=useState([]), [work,setWork]=useState(null), [loading,setLoading]=useState(true)
@@ -209,18 +237,39 @@ function MasterDriver({profile,work}){
       else if(emailKey && drivers.some(d=>normEmail(d.email)===emailKey))error='email sudah terdaftar'
       else if(isAdmin(work)&&!site)error='site_code tidak ditemukan'
       seenNrp.add(nrpKey); if(emailKey) seenEmail.add(emailKey); if(nameKey) seenName.add(nameKey)
-      return {row:i+2,site_code:isAdmin(work)?siteCode:work.sites?.site_code,nama_driver:clean(r.nama_driver),nrp_driver:clean(r.nrp_driver),email:normEmail(r.email),password:clean(r.password),vendor_name:vendorName,status:clean(r.status)||'Aktif',mulai_dinas:clean(r.mulai_dinas),end_masa_dinas:clean(r.end_masa_dinas),site_id:site?.id,vendor_id:vendor?.id,error}
+      return {row:i+2,site_code:isAdmin(work)?siteCode:work.sites?.site_code,nama_driver:clean(r.nama_driver),nrp_driver:clean(r.nrp_driver),email:normEmail(r.email),password:clean(r.password),vendor_name:vendorName,status:clean(r.status)||'Aktif',mulai_dinas:excelDateToIso(r.mulai_dinas),end_masa_dinas:excelDateToIso(r.end_masa_dinas),site_id:site?.id,vendor_id:vendor?.id,error}
     })
     setPreview(mapped)
   }
   async function importRows(){
+    setMsg('')
     const valid=preview.filter(r=>!r.error)
     if(valid.length!==preview.length)return setMsg('Masih ada baris invalid.')
+    const errors=[]
     for(const [i,r] of valid.entries()){
-      if(r.email&&r.password) await createAuthUser({email:r.email,password:r.password,nama:r.nama_driver,nrp:r.nrp_driver,app_id:work.app_id||work.applications?.id,site_id:r.site_id,role:'Driver'})
-      let vendorId=r.vendor_id
-      if(r.vendor_name&&!vendorId){ const {data:v}=await supabase.from('vendors').insert({vendor_code:makeVendorCode(i),vendor_name:r.vendor_name,status:'Aktif'}).select().single(); vendorId=v?.id }
-      await supabase.from('drivers').upsert({site_id:r.site_id,nama_driver:r.nama_driver,nrp_driver:r.nrp_driver,email:r.email||null,vendor_id:vendorId||null,status:r.status,mulai_dinas:r.mulai_dinas||null,end_masa_dinas:r.end_masa_dinas||null},{onConflict:'nrp_driver'})
+      try{
+        let vendorId=r.vendor_id
+        if(r.vendor_name&&!vendorId){
+          const {data:v,error:vendorError}=await supabase.from('vendors').insert({vendor_code:makeVendorCode(i),vendor_name:r.vendor_name,status:'Aktif'}).select().single()
+          if(vendorError) throw vendorError
+          vendorId=v?.id
+        }
+        const {error:driverError}=await supabase.from('drivers').upsert({site_id:r.site_id,nama_driver:r.nama_driver,nrp_driver:r.nrp_driver,email:r.email||null,vendor_id:vendorId||null,status:r.status,mulai_dinas:r.mulai_dinas||null,end_masa_dinas:r.end_masa_dinas||null},{onConflict:'nrp_driver'})
+        if(driverError) throw driverError
+        if(r.email&&r.password){
+          try{
+            await createAuthUser({email:r.email,password:r.password,nama:r.nama_driver,nrp:r.nrp_driver,app_id:work.app_id||work.applications?.id,site_id:r.site_id,role:'Driver'})
+          }catch(authErr){
+            errors.push(`Baris ${r.row}: data driver tersimpan, tapi akun login gagal dibuat (${authErr.message||String(authErr)})`)
+          }
+        }
+      }catch(e){
+        errors.push(`Baris ${r.row}: ${e.message||String(e)}`)
+      }
+    }
+    if(errors.length){
+      setMsg(`Import selesai: ${valid.length} driver tersimpan. Catatan akun login: ${errors.slice(0,3).join(' | ')}`)
+      setPreview([]); load(); return
     }
     setMsg(`Import berhasil ${valid.length} driver.`); setPreview([]); load()
   }
