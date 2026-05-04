@@ -600,10 +600,9 @@ function DriverMaster({ context }) {
     setModalOpen(true)
   }
 
-  function duplicateMessage(dup, nrpKey, emailKey, nameKey){
+  function duplicateMessage(dup, nrpKey, emailKey){
     if (dup.nrp_driver && cleanText(dup.nrp_driver).toLowerCase() === nrpKey) return 'NRP driver sudah terdaftar.'
     if (emailKey && cleanText(dup.email).toLowerCase() === emailKey) return 'Email driver sudah terdaftar.'
-    if (nameKey && cleanText(dup.nama_driver).toLowerCase() === nameKey) return 'Nama driver sudah terdaftar.'
     return 'Data driver sudah terdaftar.'
   }
 
@@ -613,13 +612,11 @@ function DriverMaster({ context }) {
     const siteId = adminHO ? form.site_id : context.site_id
     const nrpKey = cleanText(form.nrp_driver).toLowerCase()
     const emailKey = cleanText(form.email).toLowerCase()
-    const nameKey = cleanText(form.nama_driver).toLowerCase()
     const dup = drivers.find(d => String(d.id) !== String(editingId || '') && (
       cleanText(d.nrp_driver).toLowerCase() === nrpKey ||
-      (emailKey && cleanText(d.email).toLowerCase() === emailKey) ||
-      (nameKey && cleanText(d.nama_driver).toLowerCase() === nameKey)
+      (emailKey && cleanText(d.email).toLowerCase() === emailKey)
     ))
-    if (dup) return setMessage(duplicateMessage(dup, nrpKey, emailKey, nameKey))
+    if (dup) return setMessage(duplicateMessage(dup, nrpKey, emailKey))
     if (form.email && !form.email.includes('@')) return setMessage('Email login driver tidak valid.')
     if (form.email && !form.password && !editingId) return setMessage('Password wajib diisi jika membuat akun login driver.')
     if (form.password && String(form.password).length < 6) return setMessage('Password minimal 6 karakter.')
@@ -666,25 +663,23 @@ function DriverMaster({ context }) {
     setMessage('')
     try{
       const rows = (await parseExcelOrCsv(file)).map(normalizeRow)
-      const seenNrp=new Set(), seenEmail=new Set(), seenName=new Set()
+      const seenNrp=new Set(), seenEmail=new Set()
       const [{data:allSites},{data:allVendors}] = await Promise.all([supabase.from('sites').select('id,site_code'), supabase.from('vendors').select('id,vendor_name')])
       const mapped = rows.map((r,idx)=>{
         const siteCode = adminHO ? cleanText(r.site_code).toUpperCase() : context.sites?.site_code
         const vendorName = cleanText(r.vendor_name || r.vendor)
         const site=(allSites||[]).find(s=>s.site_code===siteCode)
         const vendor= vendorName ? (allVendors||[]).find(v=>cleanText(v.vendor_name).toLowerCase()===vendorName.toLowerCase()) : null
-        const nrpKey=cleanText(r.nrp_driver).toLowerCase(), emailKey=cleanText(r.email).toLowerCase(), nameKey=cleanText(r.nama_driver).toLowerCase()
+        const nrpKey=cleanText(r.nrp_driver).toLowerCase(), emailKey=cleanText(r.email).toLowerCase()
         let error = ''
         if(!site) error = 'site_code tidak ditemukan'
         else if(!cleanText(r.nama_driver) || !cleanText(r.nrp_driver)) error = 'nama_driver dan nrp_driver wajib'
         else if(cleanText(r.email) && !cleanText(r.email).includes('@')) error = 'email tidak valid'
         else if(seenNrp.has(nrpKey)) error='nrp_driver double di file import'
-        else if(nameKey && seenName.has(nameKey)) error='nama_driver double di file import'
         else if(emailKey && seenEmail.has(emailKey)) error='email double di file import'
         else if(drivers.some(d=>cleanText(d.nrp_driver).toLowerCase()===nrpKey)) error='nrp_driver sudah terdaftar'
-        else if(nameKey && drivers.some(d=>cleanText(d.nama_driver).toLowerCase()===nameKey)) error='nama_driver sudah terdaftar'
         else if(emailKey && drivers.some(d=>cleanText(d.email).toLowerCase()===emailKey)) error='email sudah terdaftar'
-        seenNrp.add(nrpKey); if(emailKey) seenEmail.add(emailKey); if(nameKey) seenName.add(nameKey)
+        seenNrp.add(nrpKey); if(emailKey) seenEmail.add(emailKey)
         return { row:idx+2, site_code:siteCode, nama_driver:cleanText(r.nama_driver), nrp_driver:cleanText(r.nrp_driver), email:emailKey, password:cleanText(r.password), vendor_name:vendor?.vendor_name||vendorName, mulai_dinas:excelDateToIso(r.mulai_dinas), end_masa_dinas:excelDateToIso(r.end_masa_dinas), status:cleanText(r.status)||'Aktif', site_id:site?.id, vendor_id:vendor?.id||null, error }
       })
       setPreview(mapped)

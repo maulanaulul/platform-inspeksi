@@ -156,14 +156,32 @@ function Dashboard({work}){
 function Kpi({title,value,icon}){ return <div className="kpi"><div><span>{title}</span><strong>{value}</strong></div><div className="kpi-icon">{icon}</div></div> }
 
 function Questions(){
-  const [questions,setQuestions]=useState([]), [preview,setPreview]=useState([]), [msg,setMsg]=useState(''), [form,setForm]=useState({category:'DRD',question_text:'',option_a:'',option_b:'',option_c:'',option_d:'',correct_answer:'A'})
+  const emptyQuestion={category:'DRD',question_text:'',option_a:'',option_b:'',option_c:'',option_d:'',correct_answer:'A'}
+  const [questions,setQuestions]=useState([]), [preview,setPreview]=useState([]), [msg,setMsg]=useState(''), [form,setForm]=useState(emptyQuestion), [editOpen,setEditOpen]=useState(false), [editId,setEditId]=useState(null), [editForm,setEditForm]=useState({...emptyQuestion,status:'Aktif'})
   useEffect(()=>{load()},[])
   async function load(){ const {data:q}=await supabase.from('drd_questions').select('*').order('category').order('created_at',{ascending:false}); setQuestions(q||[]) }
   async function file(e){ const f=e.target.files?.[0]; if(!f)return; const rows=await readExcel(f); setPreview(rows.map((r,i)=>({row:i+2,category:clean(r.category)||'DRD',question_text:clean(r.question_text),option_a:clean(r.option_a),option_b:clean(r.option_b),option_c:clean(r.option_c),option_d:clean(r.option_d),correct_answer:clean(r.correct_answer).toUpperCase()}))) }
   async function importRows(){ const ok=preview.filter(r=>QUESTION_CATEGORIES.includes(r.category)&&r.question_text&&r.option_a&&r.option_b&&r.option_c&&r.option_d&&['A','B','C','D'].includes(r.correct_answer)); if(ok.length!==preview.length)return setMsg('Masih ada baris invalid. Category harus DRD atau Induksi Driver.'); const {error}=await supabase.from('drd_questions').insert(ok.map(({row,...r})=>({...r,package_id:null,status:'Aktif'}))); setMsg(error?error.message:`Import berhasil ${ok.length} soal.`); setPreview([]); load() }
-  async function save(e){ e.preventDefault(); const {error}=await supabase.from('drd_questions').insert({...form,package_id:null,status:'Aktif'}); setMsg(error?error.message:'Soal tersimpan.'); setForm({...form,question_text:'',option_a:'',option_b:'',option_c:'',option_d:''}); load() }
+  async function save(e){ e.preventDefault(); const {error}=await supabase.from('drd_questions').insert({...form,package_id:null,status:'Aktif'}); setMsg(error?error.message:'Soal tersimpan.'); setForm({...emptyQuestion}); load() }
+  function openEdit(q){ setEditId(q.id); setEditForm({category:q.category||'DRD',question_text:q.question_text||'',option_a:q.option_a||'',option_b:q.option_b||'',option_c:q.option_c||'',option_d:q.option_d||'',correct_answer:q.correct_answer||'A',status:q.status||'Aktif'}); setEditOpen(true); setMsg('') }
+  function closeEdit(){ setEditOpen(false); setEditId(null); setEditForm({...emptyQuestion,status:'Aktif'}) }
+  async function updateQuestion(e){
+    e.preventDefault()
+    if(!QUESTION_CATEGORIES.includes(editForm.category)) return setMsg('Kategori harus DRD atau Induksi Driver.')
+    if(!editForm.question_text || !editForm.option_a || !editForm.option_b || !editForm.option_c || !editForm.option_d) return setMsg('Soal dan semua pilihan jawaban wajib diisi.')
+    if(!['A','B','C','D'].includes(editForm.correct_answer)) return setMsg('Correct answer harus A, B, C, atau D.')
+    const {error}=await supabase.from('drd_questions').update(editForm).eq('id',editId)
+    setMsg(error?error.message:'Soal berhasil diupdate.')
+    if(!error){ closeEdit(); load() }
+  }
+  async function deleteQuestion(q){
+    if(!confirm('Delete soal ini? Soal akan dinonaktifkan agar histori test tetap aman.')) return
+    const {error}=await supabase.from('drd_questions').update({status:'Nonaktif'}).eq('id',q.id)
+    setMsg(error?error.message:'Soal berhasil di-delete/nonaktifkan.')
+    load()
+  }
   const rows=questions.map(q=>({id:q.id, kategori:q.category, soal:q.question_text, jawaban:q.correct_answer, status:q.status}))
-  return <div className="stack"><Panel title="Bank Soal DRD & Induksi" desc="Tidak ada paket soal. Semua soal aktif pada kategori DRD otomatis muncul untuk tes DRD; kategori Induksi Driver otomatis muncul untuk induksi."><div className="import-actions"><button className="secondary" onClick={()=>templateXlsx('template-bank-soal-drd-induksi.xlsx',[{category:'DRD',question_text:'Apa tindakan saat mengantuk?',option_a:'Tetap jalan',option_b:'Berhenti dan istirahat',option_c:'Tambah kecepatan',option_d:'Abaikan',correct_answer:'B'},{category:'Induksi Driver',question_text:'Apa yang wajib dilakukan setelah kembali onsite?',option_a:'Langsung kerja',option_b:'Mengikuti induksi',option_c:'Abaikan arahan',option_d:'Tidak perlu lapor',correct_answer:'B'}])}><Download size={16}/> Download Template</button><label className="upload-line"><Upload size={16}/> Upload Excel<input type="file" accept=".xlsx,.xls" onChange={file}/></label>{preview.length>0&&<button onClick={importRows}>Submit Import</button>}</div>{preview.length>0&&<div className="upload-preview"><DataTable rows={preview}/></div>}</Panel><Panel title="Tambah Soal Manual"><form className="form-grid" onSubmit={save}><label>Kategori<select value={form.category} onChange={e=>setForm({...form,category:e.target.value})}>{QUESTION_CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></label><label>Soal<input value={form.question_text} onChange={e=>setForm({...form,question_text:e.target.value})}/></label><label>Jawaban<select value={form.correct_answer} onChange={e=>setForm({...form,correct_answer:e.target.value})}>{['A','B','C','D'].map(x=><option key={x}>{x}</option>)}</select></label><label>Opsi A<input value={form.option_a} onChange={e=>setForm({...form,option_a:e.target.value})}/></label><label>Opsi B<input value={form.option_b} onChange={e=>setForm({...form,option_b:e.target.value})}/></label><label>Opsi C<input value={form.option_c} onChange={e=>setForm({...form,option_c:e.target.value})}/></label><label>Opsi D<input value={form.option_d} onChange={e=>setForm({...form,option_d:e.target.value})}/></label><button>Simpan Soal</button></form>{msg&&<p className="message">{msg}</p>}</Panel><Panel title="Row Data Bank Soal" action={<button onClick={()=>exportXlsx('bank-soal-drd-induksi.xlsx',rows)}><Download size={16}/> Export</button>}><DataTable rows={rows}/></Panel></div>
+  return <div className="stack"><Panel title="Bank Soal DRD & Induksi" desc="Tidak ada paket soal. Semua soal aktif pada kategori DRD otomatis muncul untuk tes DRD; kategori Induksi Driver otomatis muncul untuk induksi."><div className="import-actions"><button className="secondary" onClick={()=>templateXlsx('template-bank-soal-drd-induksi.xlsx',[{category:'DRD',question_text:'Apa tindakan saat mengantuk?',option_a:'Tetap jalan',option_b:'Berhenti dan istirahat',option_c:'Tambah kecepatan',option_d:'Abaikan',correct_answer:'B'},{category:'Induksi Driver',question_text:'Apa yang wajib dilakukan setelah kembali onsite?',option_a:'Langsung kerja',option_b:'Mengikuti induksi',option_c:'Abaikan arahan',option_d:'Tidak perlu lapor',correct_answer:'B'}])}><Download size={16}/> Download Template</button><label className="upload-line"><Upload size={16}/> Upload Excel<input type="file" accept=".xlsx,.xls" onChange={file}/></label>{preview.length>0&&<button onClick={importRows}>Submit Import</button>}</div>{preview.length>0&&<div className="upload-preview"><DataTable rows={preview}/></div>}</Panel><Panel title="Tambah Soal Manual"><form className="form-grid" onSubmit={save}><label>Kategori<select value={form.category} onChange={e=>setForm({...form,category:e.target.value})}>{QUESTION_CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></label><label>Soal<input value={form.question_text} onChange={e=>setForm({...form,question_text:e.target.value})}/></label><label>Jawaban<select value={form.correct_answer} onChange={e=>setForm({...form,correct_answer:e.target.value})}>{['A','B','C','D'].map(x=><option key={x}>{x}</option>)}</select></label><label>Opsi A<input value={form.option_a} onChange={e=>setForm({...form,option_a:e.target.value})}/></label><label>Opsi B<input value={form.option_b} onChange={e=>setForm({...form,option_b:e.target.value})}/></label><label>Opsi C<input value={form.option_c} onChange={e=>setForm({...form,option_c:e.target.value})}/></label><label>Opsi D<input value={form.option_d} onChange={e=>setForm({...form,option_d:e.target.value})}/></label><button>Simpan Soal</button></form>{msg&&<p className="message">{msg}</p>}</Panel><Panel title="Row Data Bank Soal" action={<button onClick={()=>exportXlsx('bank-soal-drd-induksi.xlsx',rows)}><Download size={16}/> Export</button>}><DataTable rows={rows} actions={(r,i)=><div className="row-actions"><button className="secondary small" onClick={()=>openEdit(questions[i])}>Edit</button><button className="danger small" onClick={()=>deleteQuestion(questions[i])}>Delete</button></div>}/></Panel>{editOpen&&<div className="modal-backdrop" onClick={closeEdit}><div className="modal-card" onClick={e=>e.stopPropagation()}><div className="modal-head"><h3>Edit Soal</h3><button type="button" className="secondary small" onClick={closeEdit}>Tutup</button></div><form className="form-grid" onSubmit={updateQuestion}><label>Kategori<select value={editForm.category} onChange={e=>setEditForm({...editForm,category:e.target.value})}>{QUESTION_CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></label><label>Status<select value={editForm.status} onChange={e=>setEditForm({...editForm,status:e.target.value})}><option>Aktif</option><option>Nonaktif</option></select></label><label className="full">Soal<textarea rows="3" value={editForm.question_text} onChange={e=>setEditForm({...editForm,question_text:e.target.value})}/></label><label>Opsi A<input value={editForm.option_a} onChange={e=>setEditForm({...editForm,option_a:e.target.value})}/></label><label>Opsi B<input value={editForm.option_b} onChange={e=>setEditForm({...editForm,option_b:e.target.value})}/></label><label>Opsi C<input value={editForm.option_c} onChange={e=>setEditForm({...editForm,option_c:e.target.value})}/></label><label>Opsi D<input value={editForm.option_d} onChange={e=>setEditForm({...editForm,option_d:e.target.value})}/></label><label>Correct Answer<select value={editForm.correct_answer} onChange={e=>setEditForm({...editForm,correct_answer:e.target.value})}>{['A','B','C','D'].map(x=><option key={x}>{x}</option>)}</select></label><div className="modal-actions"><button type="button" className="secondary" onClick={closeEdit}>Batal</button><button>Simpan Perubahan</button></div></form></div></div>}</div>
 }
 
 function InductionVideos(){
@@ -199,9 +217,9 @@ function MasterDriver({profile,work}){
   async function save(e){
     e.preventDefault(); setMsg('')
     const siteId=isAdmin(work)?form.site_id:work.site_id
-    const nrpKey=clean(form.nrp_driver).toLowerCase(), emailKey=normEmail(form.email), nameKey=clean(form.nama_driver).toLowerCase()
-    const dup=drivers.find(d=>String(d.id)!==String(editing||'') && (clean(d.nrp_driver).toLowerCase()===nrpKey || (emailKey && normEmail(d.email)===emailKey) || (nameKey && clean(d.nama_driver).toLowerCase()===nameKey)))
-    if(dup) return setMsg(dup.nrp_driver&&clean(dup.nrp_driver).toLowerCase()===nrpKey?'NRP driver sudah terdaftar.':(emailKey&&normEmail(dup.email)===emailKey?'Email driver sudah terdaftar.':'Nama driver sudah terdaftar.'))
+    const nrpKey=clean(form.nrp_driver).toLowerCase(), emailKey=normEmail(form.email)
+    const dup=drivers.find(d=>String(d.id)!==String(editing||'') && (clean(d.nrp_driver).toLowerCase()===nrpKey || (emailKey && normEmail(d.email)===emailKey)))
+    if(dup) return setMsg(dup.nrp_driver&&clean(dup.nrp_driver).toLowerCase()===nrpKey?'NRP driver sudah terdaftar.':'Email driver sudah terdaftar.')
     if(form.email&&form.password){ try{ await createAuthUser({email:form.email,password:form.password,nama:form.nama_driver,nrp:form.nrp_driver,app_id:work.app_id||work.applications?.id,site_id:siteId,role:'Driver'}) }catch(err){ return setMsg(err.message||'Gagal membuat akun login driver') } }
     const payload={site_id:siteId,nama_driver:form.nama_driver,nrp_driver:form.nrp_driver,email:normEmail(form.email)||null,vendor_id:form.vendor_id||null,status:form.status,mulai_dinas:form.mulai_dinas||null,end_masa_dinas:form.end_masa_dinas||null,updated_at:new Date().toISOString()}
     const {error}=editing
@@ -219,24 +237,22 @@ function MasterDriver({profile,work}){
   async function previewFile(file){
     if(!file)return
     const rows=await readExcel(file)
-    const seenNrp=new Set(), seenEmail=new Set(), seenName=new Set()
+    const seenNrp=new Set(), seenEmail=new Set()
     const mapped=rows.map((r,i)=>{
       const siteCode=clean(r.site_code).toUpperCase()
       const site=isAdmin(work)?sites.find(s=>s.site_code===siteCode):sites.find(s=>s.id===work.site_id)
       const vendorName=clean(r.vendor_name)
       const vendor=vendors.find(v=>clean(v.vendor_name).toLowerCase()===vendorName.toLowerCase())
       let error=''
-      const nrpKey=clean(r.nrp_driver).toLowerCase(), emailKey=normEmail(r.email), nameKey=clean(r.nama_driver).toLowerCase()
+      const nrpKey=clean(r.nrp_driver).toLowerCase(), emailKey=normEmail(r.email)
       if(!clean(r.nama_driver))error='nama_driver wajib'
       else if(!clean(r.nrp_driver))error='nrp_driver wajib'
       else if(seenNrp.has(nrpKey))error='nrp_driver double di file import'
-      else if(nameKey && seenName.has(nameKey))error='nama driver double di file import'
       else if(emailKey && seenEmail.has(emailKey))error='email double di file import'
       else if(drivers.some(d=>clean(d.nrp_driver).toLowerCase()===nrpKey))error='nrp_driver sudah terdaftar'
-      else if(nameKey && drivers.some(d=>clean(d.nama_driver).toLowerCase()===nameKey))error='nama driver sudah terdaftar'
       else if(emailKey && drivers.some(d=>normEmail(d.email)===emailKey))error='email sudah terdaftar'
       else if(isAdmin(work)&&!site)error='site_code tidak ditemukan'
-      seenNrp.add(nrpKey); if(emailKey) seenEmail.add(emailKey); if(nameKey) seenName.add(nameKey)
+      seenNrp.add(nrpKey); if(emailKey) seenEmail.add(emailKey)
       return {row:i+2,site_code:isAdmin(work)?siteCode:work.sites?.site_code,nama_driver:clean(r.nama_driver),nrp_driver:clean(r.nrp_driver),email:normEmail(r.email),password:clean(r.password),vendor_name:vendorName,status:clean(r.status)||'Aktif',mulai_dinas:excelDateToIso(r.mulai_dinas),end_masa_dinas:excelDateToIso(r.end_masa_dinas),site_id:site?.id,vendor_id:vendor?.id,error}
     })
     setPreview(mapped)
