@@ -15,6 +15,7 @@ const ROLE_ADMIN = ['Platform Admin', 'App Admin']
 const QUESTION_CATEGORIES = ['DRD', 'Induksi Driver']
 
 function clean(v){ return String(v ?? '').trim() }
+function makeVendorCode(idx=0){ return `VEN-${Date.now().toString(36).toUpperCase()}-${String(idx+1).padStart(3,'0')}` }
 function normEmail(v){ return clean(v).toLowerCase() }
 function today(){ return new Date().toISOString().slice(0,10) }
 function months(n){ const d = new Date(); d.setMonth(d.getMonth()+n); return d.toISOString().slice(0,10) }
@@ -215,10 +216,10 @@ function MasterDriver({profile,work}){
   async function importRows(){
     const valid=preview.filter(r=>!r.error)
     if(valid.length!==preview.length)return setMsg('Masih ada baris invalid.')
-    for(const r of valid){
+    for(const [i,r] of valid.entries()){
       if(r.email&&r.password) await createAuthUser({email:r.email,password:r.password,nama:r.nama_driver,nrp:r.nrp_driver,app_id:work.app_id||work.applications?.id,site_id:r.site_id,role:'Driver'})
       let vendorId=r.vendor_id
-      if(r.vendor_name&&!vendorId){ const {data:v}=await supabase.from('vendors').insert({vendor_name:r.vendor_name,status:'Aktif'}).select().single(); vendorId=v?.id }
+      if(r.vendor_name&&!vendorId){ const {data:v}=await supabase.from('vendors').insert({vendor_code:makeVendorCode(i),vendor_name:r.vendor_name,status:'Aktif'}).select().single(); vendorId=v?.id }
       await supabase.from('drivers').upsert({site_id:r.site_id,nama_driver:r.nama_driver,nrp_driver:r.nrp_driver,email:r.email||null,vendor_id:vendorId||null,status:r.status,mulai_dinas:r.mulai_dinas||null,end_masa_dinas:r.end_masa_dinas||null},{onConflict:'nrp_driver'})
     }
     setMsg(`Import berhasil ${valid.length} driver.`); setPreview([]); load()
@@ -502,7 +503,7 @@ function AdminPanelDRD({profile,work}){
     try{
       const valid=preview.filter(r=>!r.error)
       if(valid.length!==preview.length) throw new Error('Masih ada baris invalid pada preview.')
-      for(const r of valid){
+      for(const [i,r] of valid.entries()){
         if(r.email && r.password) await createAuthUser({email:r.email,password:r.password,nama:r.nama,nrp:r.nrp,app_id:work.app_id||work.applications?.id,site_id:r.site_id,role:r.role})
         const profileRow=await upsertProfile(r)
         await ensureAccess(profileRow, r)

@@ -49,6 +49,7 @@ function normalizeRow(row){
   return out
 }
 function cleanText(v){ return String(v ?? '').trim() }
+function makeVendorCode(idx=0){ return `VEN-${Date.now().toString(36).toUpperCase()}-${String(idx+1).padStart(3,'0')}` }
 function today(){ return new Date().toISOString().slice(0, 10) }
 function isExpired(date){ return !!date && String(date) < today() }
 function generatePassword(){ return `SRGS${Math.random().toString(36).slice(2,8).toUpperCase()}!` }
@@ -677,7 +678,7 @@ function DriverMaster({ context }) {
         const { data: existingVendor } = await supabase.from('vendors').select('id').ilike('vendor_name', r.vendor_name).maybeSingle()
         if (existingVendor?.id) vendorId = existingVendor.id
         else {
-          const { data: newVendor, error: vendorErr } = await supabase.from('vendors').insert({ vendor_name: r.vendor_name, status: 'Aktif' }).select('id').single()
+          const { data: newVendor, error: vendorErr } = await supabase.from('vendors').insert({ vendor_code: makeVendorCode(), vendor_name: r.vendor_name, status: 'Aktif' }).select('id').single()
           if (vendorErr) return setMessage(vendorErr.message)
           vendorId = newVendor.id
         }
@@ -1089,8 +1090,7 @@ function AdminPanel({ context, profile }) {
   function resetSite(){ setSiteForm({ id:null, site_code:'', site_name:'', region:'Operation', status:'Aktif' }) }
   async function saveVendor(e){
     e.preventDefault(); setMessage('')
-    const payload = { vendor_name: cleanText(vendorForm.vendor_name), status: vendorForm.status || 'Aktif' }
-    if (vendorForm.id && cleanText(vendorForm.vendor_code)) payload.vendor_code = cleanText(vendorForm.vendor_code).toUpperCase()
+    const payload = { vendor_code: vendorForm.id && cleanText(vendorForm.vendor_code) ? cleanText(vendorForm.vendor_code).toUpperCase() : makeVendorCode(), vendor_name: cleanText(vendorForm.vendor_name), status: vendorForm.status || 'Aktif' }
     const q = vendorForm.id ? supabase.from('vendors').update(payload).eq('id', vendorForm.id) : supabase.from('vendors').insert(payload)
     const {error}=await q
     if(error)setMessage(error.message); else{resetVendor(); setMessage('Vendor tersimpan.'); load()}
@@ -1110,7 +1110,7 @@ function AdminPanel({ context, profile }) {
     try{
       const rows = (await parseExcelOrCsv(file)).map(normalizeRow)
       if(type==='vendors'){
-        setVendorPreview(rows.map((r,idx)=>({ row: idx+2, vendor_code: `VEN-AUTO-${String(idx+1).padStart(3,'0')}`, vendor_name: cleanText(r.vendor_name), status: cleanText(r.status)||'Aktif', error: !cleanText(r.vendor_name) ? 'vendor_name wajib. vendor_code dibuat otomatis oleh sistem' : '' })))
+        setVendorPreview(rows.map((r,idx)=>({ row: idx+2, vendor_code: makeVendorCode(idx), vendor_name: cleanText(r.vendor_name), status: cleanText(r.status)||'Aktif', error: !cleanText(r.vendor_name) ? 'vendor_name wajib. vendor_code dibuat otomatis oleh sistem' : '' })))
       }
       if(type==='sites'){
         setSitePreview(rows.map((r,idx)=>({ row: idx+2, site_code: cleanText(r.site_code).toUpperCase(), site_name: cleanText(r.site_name||r.site_code), region: cleanText(r.region)||'Operation', status: cleanText(r.status)||'Aktif', error: !cleanText(r.site_code) ? 'site_code wajib' : '' })))
@@ -1118,7 +1118,7 @@ function AdminPanel({ context, profile }) {
     }catch(e){ setMessage(e.message) }
   }
   async function submitVendorImport(){
-    const valid = vendorPreview.filter(r=>!r.error).map(r=>({ vendor_name:r.vendor_name, status:r.status }))
+    const valid = vendorPreview.filter(r=>!r.error).map((r,idx)=>({ vendor_code:r.vendor_code || makeVendorCode(idx), vendor_name:r.vendor_name, status:r.status }))
     const {error}=await supabase.from('vendors').insert(valid)
     if(error)setMessage(error.message); else{setMessage(`Import vendor berhasil: ${valid.length} baris.`); setVendorPreview([]); load()}
   }
