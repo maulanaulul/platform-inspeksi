@@ -23,6 +23,15 @@ type Body = {
 
 const ADMIN_ROLES = ['Platform Admin', 'App Admin']
 
+function validEmail(email: string) {
+  return /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/.test(email)
+}
+
+function isDuplicateError(error: any) {
+  const msg = String(error?.message || error?.details || '')
+  return error?.code === '23505' || msg.includes('duplicate key value') || msg.includes('uq_user_app_access_active')
+}
+
 async function findAuthUserByEmail(admin: any, email: string) {
   const target = email.toLowerCase().trim()
   let page = 1
@@ -35,6 +44,22 @@ async function findAuthUserByEmail(admin: any, email: string) {
     page += 1
   }
   return null
+}
+
+async function findExistingAccess(admin: any, profileId: string, body: Body) {
+  let q = admin
+    .from('user_app_access')
+    .select('id, role, status, app_id, site_id')
+    .eq('user_id', profileId)
+    .eq('app_id', body.app_id)
+    .eq('role', body.role)
+    .eq('status', 'Aktif')
+
+  q = body.site_id ? q.eq('site_id', body.site_id) : q.is('site_id', null)
+
+  const { data, error } = await q.maybeSingle()
+  if (error) throw error
+  return data
 }
 
 serve(async (req) => {
@@ -87,11 +112,13 @@ serve(async (req) => {
     const nama = String(body.nama || email).trim()
     const nrp = String(body.nrp || '').trim()
     if (!email) throw new Error('Email wajib diisi')
+    if (!validEmail(email)) throw new Error('Format email tidak valid. Gunakan format nama@domain.com.')
     if (!password || password.length < 6) throw new Error('Password minimal 6 karakter')
     if (!body.app_id) throw new Error('Aplikasi wajib dipilih')
     if (!body.role) throw new Error('Role wajib dipilih')
     if (email === String(callerEmail || '').toLowerCase()) throw new Error('Email user baru tidak boleh sama dengan email admin yang sedang login. Gunakan tambah mapping user existing untuk akun admin.')
 
+    let authAction = 'existing_user'
     let authUser = await findAuthUserByEmail(admin, email)
     if (!authUser) {
       const { data: created, error: createError } = await admin.auth.admin.createUser({
@@ -102,6 +129,7 @@ serve(async (req) => {
       })
       if (createError) throw createError
       authUser = created.user
+      authAction = 'created_user'
     } else {
       const { data: updated, error: updateError } = await admin.auth.admin.updateUserById(authUser.id, {
         password,
@@ -110,6 +138,7 @@ serve(async (req) => {
       })
       if (updateError) throw updateError
       authUser = updated.user
+      authAction = 'updated_existing_user'
     }
 
     const { data: profile, error: profileError } = await admin
@@ -119,20 +148,33 @@ serve(async (req) => {
       .single()
     if (profileError) throw profileError
 
-    const { data: mapping, error: mappingError } = await admin
-      .from('user_app_access')
-      .insert({
-        user_id: profile.id,
-        app_id: body.app_id,
-        role: body.role,
-        site_id: body.site_id || null,
-        status: 'Aktif',
-      })
-      .select('id, role, status')
-      .single()
-    if (mappingError) throw mappingError
+    let mapping = await findExistingAccess(admin, profile.id, body)
+    let mappingAction = mapping ? 'access_already_exists' : 'created_access'
 
-    return new Response(JSON.stringify({ ok: true, auth_user_id: authUser.id, profile, mapping }), {
+    if (!mapping) {
+      const { data: insertedMapping, error: mappingError } = await admin
+        .from('user_app_access')
+        .insert({
+          user_id: profile.id,
+          app_id: body.app_id,
+          role: body.role,
+          site_id: body.site_id || null,
+          status: 'Aktif',
+        })
+        .select('id, role, status, app_id, site_id')
+        .single()
+
+      if (mappingError) {
+        if (!isDuplicateError(mappingError)) throw mappingError
+        mapping = await findExistingAccess(admin, profile.id, body)
+        if (!mapping) throw mappingError
+        mappingAction = 'access_already_exists'
+      } else {
+        mapping = insertedMapping
+      }
+    }
+
+    return new Response(JSON.stringify({ ok: true, auth_user_id: authUser.id, profile, mapping, auth_action: authAction, mapping_action: mappingAction }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       status: 200,
     })

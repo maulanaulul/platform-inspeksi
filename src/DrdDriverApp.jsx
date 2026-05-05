@@ -30,6 +30,7 @@ function excelDateToIso(v){
   return raw
 }
 function normEmail(v){ return clean(v).toLowerCase() }
+function isValidEmail(v){ const e = normEmail(v); return !e || /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/.test(e) }
 function today(){ return new Date().toISOString().slice(0,10) }
 function months(n){ const d = new Date(); d.setMonth(d.getMonth()+n); return d.toISOString().slice(0,10) }
 function isAdmin(w){ return ROLE_ADMIN.includes(w?.role) }
@@ -43,7 +44,9 @@ async function readExcel(file){ const buf = await file.arrayBuffer(); const wb =
 function badge(s){ const v = String(s || '-'); const cls = v.includes('Lulus') || v.includes('Closed') || v.includes('Aktif') || v.includes('Sudah') ? 'b-green' : v.includes('Open') || v.includes('Habis') || v.includes('Expired') || v.includes('Wajib') ? 'b-red' : v.includes('Cuti') || v.includes('Belum') ? 'b-amber' : 'b-blue'; return <span className={`badge ${cls}`}>{v}</span> }
 async function createAuthUser({ email, password, nama, nrp, app_id, site_id, role='Driver' }){
   if(!email || !password) return {ok:true,skipped:true}
-  const {data,error}=await supabase.functions.invoke('admin-create-user',{ body:{ email:normEmail(email), password, nama, nrp, app_id, role, site_id } })
+  const cleanEmail = normEmail(email)
+  if(!isValidEmail(cleanEmail)) throw new Error('Format email login driver tidak valid. Gunakan format nama@domain.com.')
+  const {data,error}=await supabase.functions.invoke('admin-create-user',{ body:{ email:cleanEmail, password, nama, nrp, app_id, role, site_id } })
   if(error){
     let detail = error.message || 'Gagal membuat akun Auth'
     try{
@@ -220,6 +223,7 @@ function MasterDriver({profile,work}){
     const nrpKey=clean(form.nrp_driver).toLowerCase(), emailKey=normEmail(form.email)
     const dup=drivers.find(d=>String(d.id)!==String(editing||'') && (clean(d.nrp_driver).toLowerCase()===nrpKey || (emailKey && normEmail(d.email)===emailKey)))
     if(dup) return setMsg(dup.nrp_driver&&clean(dup.nrp_driver).toLowerCase()===nrpKey?'NRP driver sudah terdaftar.':'Email driver sudah terdaftar.')
+    if(form.email && !isValidEmail(form.email)) return setMsg('Format email driver tidak valid. Gunakan format nama@domain.com.')
     if(form.email&&form.password){ try{ await createAuthUser({email:form.email,password:form.password,nama:form.nama_driver,nrp:form.nrp_driver,app_id:work.app_id||work.applications?.id,site_id:siteId,role:'Driver'}) }catch(err){ return setMsg(err.message||'Gagal membuat akun login driver') } }
     const payload={site_id:siteId,nama_driver:form.nama_driver,nrp_driver:form.nrp_driver,email:normEmail(form.email)||null,vendor_id:form.vendor_id||null,status:form.status,mulai_dinas:form.mulai_dinas||null,end_masa_dinas:form.end_masa_dinas||null,updated_at:new Date().toISOString()}
     const {error}=editing
@@ -247,6 +251,7 @@ function MasterDriver({profile,work}){
       const nrpKey=clean(r.nrp_driver).toLowerCase(), emailKey=normEmail(r.email)
       if(!clean(r.nama_driver))error='nama_driver wajib'
       else if(!clean(r.nrp_driver))error='nrp_driver wajib'
+      else if(emailKey && !isValidEmail(emailKey))error='email tidak valid'
       else if(seenNrp.has(nrpKey))error='nrp_driver double di file import'
       else if(emailKey && seenEmail.has(emailKey))error='email double di file import'
       else if(drivers.some(d=>clean(d.nrp_driver).toLowerCase()===nrpKey))error='nrp_driver sudah terdaftar'

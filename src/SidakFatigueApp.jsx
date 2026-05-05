@@ -49,6 +49,8 @@ function normalizeRow(row){
   return out
 }
 function cleanText(v){ return String(v ?? '').trim() }
+function normEmail(v){ return cleanText(v).toLowerCase() }
+function isValidEmail(v){ const e = normEmail(v); return !e || /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/.test(e) }
 function makeVendorCode(idx=0){ return `VEN-${Date.now().toString(36).toUpperCase()}-${String(idx+1).padStart(3,'0')}` }
 function excelDateToIso(v){
   if(v === null || v === undefined || v === '') return ''
@@ -68,8 +70,8 @@ function isExpired(date){ return !!date && String(date) < today() }
 function generatePassword(){ return `SRGS${Math.random().toString(36).slice(2,8).toUpperCase()}!` }
 async function createAuthUser({ email, password, nama, nrp, app_id, site_id, role='Driver' }){
   if(!email || !password) return { ok:true, skipped:true }
-  const cleanEmail = cleanText(email).toLowerCase()
-  if(!cleanEmail.includes('@')) throw new Error('Email login driver tidak valid.')
+  const cleanEmail = normEmail(email)
+  if(!isValidEmail(cleanEmail)) throw new Error('Format email login driver tidak valid. Gunakan format nama@domain.com.')
   if(String(password).length < 6) throw new Error('Password minimal 6 karakter.')
   const { data, error } = await supabase.functions.invoke('admin-create-user', { body:{ email:cleanEmail, password, nama, nrp, app_id, role, site_id } })
   if(error){
@@ -611,13 +613,13 @@ function DriverMaster({ context }) {
     setMessage('')
     const siteId = adminHO ? form.site_id : context.site_id
     const nrpKey = cleanText(form.nrp_driver).toLowerCase()
-    const emailKey = cleanText(form.email).toLowerCase()
+    const emailKey = normEmail(form.email)
     const dup = drivers.find(d => String(d.id) !== String(editingId || '') && (
       cleanText(d.nrp_driver).toLowerCase() === nrpKey ||
-      (emailKey && cleanText(d.email).toLowerCase() === emailKey)
+      (emailKey && normEmail(d.email) === emailKey)
     ))
     if (dup) return setMessage(duplicateMessage(dup, nrpKey, emailKey))
-    if (form.email && !form.email.includes('@')) return setMessage('Email login driver tidak valid.')
+    if (form.email && !isValidEmail(form.email)) return setMessage('Format email driver tidak valid. Gunakan format nama@domain.com.')
     if (form.email && !form.password && !editingId) return setMessage('Password wajib diisi jika membuat akun login driver.')
     if (form.password && String(form.password).length < 6) return setMessage('Password minimal 6 karakter.')
 
@@ -625,7 +627,7 @@ function DriverMaster({ context }) {
       site_id: siteId,
       nama_driver: cleanText(form.nama_driver),
       nrp_driver: cleanText(form.nrp_driver),
-      email: cleanText(form.email).toLowerCase() || null,
+      email: normEmail(form.email) || null,
       vendor_id: form.vendor_id || null,
       status: form.status || 'Aktif',
       mulai_dinas: form.mulai_dinas || null,
@@ -670,15 +672,15 @@ function DriverMaster({ context }) {
         const vendorName = cleanText(r.vendor_name || r.vendor)
         const site=(allSites||[]).find(s=>s.site_code===siteCode)
         const vendor= vendorName ? (allVendors||[]).find(v=>cleanText(v.vendor_name).toLowerCase()===vendorName.toLowerCase()) : null
-        const nrpKey=cleanText(r.nrp_driver).toLowerCase(), emailKey=cleanText(r.email).toLowerCase()
+        const nrpKey=cleanText(r.nrp_driver).toLowerCase(), emailKey=normEmail(r.email)
         let error = ''
         if(!site) error = 'site_code tidak ditemukan'
         else if(!cleanText(r.nama_driver) || !cleanText(r.nrp_driver)) error = 'nama_driver dan nrp_driver wajib'
-        else if(cleanText(r.email) && !cleanText(r.email).includes('@')) error = 'email tidak valid'
+        else if(emailKey && !isValidEmail(emailKey)) error = 'email tidak valid'
         else if(seenNrp.has(nrpKey)) error='nrp_driver double di file import'
         else if(emailKey && seenEmail.has(emailKey)) error='email double di file import'
         else if(drivers.some(d=>cleanText(d.nrp_driver).toLowerCase()===nrpKey)) error='nrp_driver sudah terdaftar'
-        else if(emailKey && drivers.some(d=>cleanText(d.email).toLowerCase()===emailKey)) error='email sudah terdaftar'
+        else if(emailKey && drivers.some(d=>normEmail(d.email)===emailKey)) error='email sudah terdaftar'
         seenNrp.add(nrpKey); if(emailKey) seenEmail.add(emailKey)
         return { row:idx+2, site_code:siteCode, nama_driver:cleanText(r.nama_driver), nrp_driver:cleanText(r.nrp_driver), email:emailKey, password:cleanText(r.password), vendor_name:vendor?.vendor_name||vendorName, mulai_dinas:excelDateToIso(r.mulai_dinas), end_masa_dinas:excelDateToIso(r.end_masa_dinas), status:cleanText(r.status)||'Aktif', site_id:site?.id, vendor_id:vendor?.id||null, error }
       })
