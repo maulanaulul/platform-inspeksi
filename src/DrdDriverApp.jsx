@@ -197,7 +197,7 @@ function InductionVideos(){
 }
 
 function MasterDriver({profile,work}){
-  const [drivers,setDrivers]=useState([]), [vendors,setVendors]=useState([]), [sites,setSites]=useState([]), [preview,setPreview]=useState([]), [msg,setMsg]=useState(''), [editing,setEditing]=useState(null), [modalOpen,setModalOpen]=useState(false), [importing,setImporting]=useState(false), [importProgress,setImportProgress]=useState({current:0,total:0})
+  const [drivers,setDrivers]=useState([]), [vendors,setVendors]=useState([]), [sites,setSites]=useState([]), [preview,setPreview]=useState([]), [msg,setMsg]=useState(''), [editing,setEditing]=useState(null), [modalOpen,setModalOpen]=useState(false), [importing,setImporting]=useState(false), [importProgress,setImportProgress]=useState({current:0,total:0}), [authGenerating,setAuthGenerating]=useState(false), [authProgress,setAuthProgress]=useState({processed:0,created:0,skipped:0,failed:0,remaining:null})
   const emptyForm={site_id:work.site_id||'',nama_driver:'',nrp_driver:'',email:'',password:'',vendor_id:'',status:'Aktif',mulai_dinas:'',end_masa_dinas:''}
   const [form,setForm]=useState(emptyForm)
   useEffect(()=>{load()},[work.id])
@@ -305,6 +305,48 @@ function MasterDriver({profile,work}){
       setImportProgress({current:0,total:0})
     }
   }
+  async function generateMissingDriverAuth(){
+    if(authGenerating) return
+    const appId=work.app_id||work.applications?.id
+    if(!appId) return setMsg('App ID DRD tidak ditemukan. Coba refresh halaman atau login ulang.')
+    const scopeText=isAdmin(work)?'semua site yang belum punya auth':'site ini'
+    if(!confirm(`Buat akun login driver untuk ${scopeText}? Password awal akan memakai NRP masing-masing driver.`)) return
+    setMsg('')
+    setAuthGenerating(true)
+    setAuthProgress({processed:0,created:0,skipped:0,failed:0,remaining:null})
+    let totalProcessed=0, totalCreated=0, totalSkipped=0, totalFailed=0, remaining=null
+    try{
+      for(let batch=0; batch<30; batch++){
+        const {data,error}=await supabase.functions.invoke('bulk-create-driver-auth',{ body:{ app_id:appId, site_id:isAdmin(work)?null:work.site_id, limit:50 } })
+        if(error){
+          let detail=error.message||'Gagal generate auth driver'
+          try{
+            if(error.context && typeof error.context.json === 'function'){
+              const body=await error.context.json()
+              detail=body?.error||body?.message||detail
+            }
+          }catch(_){ }
+          throw new Error(detail)
+        }
+        if(data?.ok===false) throw new Error(data.error||'Gagal generate auth driver')
+        const summary=data?.summary||{}
+        totalProcessed += Number(summary.processed||0)
+        totalCreated += Number(summary.created_auth||0)
+        totalSkipped += Number(summary.skipped||0)
+        totalFailed += Number(summary.failed||0)
+        remaining = Number(summary.remaining_after||0)
+        setAuthProgress({processed:totalProcessed,created:totalCreated,skipped:totalSkipped,failed:totalFailed,remaining})
+        if(!remaining || Number(summary.processed||0)===0) break
+        await new Promise(resolve=>setTimeout(resolve,300))
+      }
+      setMsg(`Generate auth selesai. Diproses: ${totalProcessed}. Auth baru: ${totalCreated}. Skip: ${totalSkipped}. Gagal: ${totalFailed}. Sisa belum punya auth: ${remaining ?? 0}.`)
+      load()
+    }catch(e){
+      setMsg(e.message||String(e))
+    }finally{
+      setAuthGenerating(false)
+    }
+  }
   const table=drivers.map(d=>({nama:d.nama_driver,nrp:d.nrp_driver,email:d.email||'-',site:d.sites?.site_code||'-',vendor:d.vendors?.vendor_name||'-',mulai_dinas:d.mulai_dinas||'-',end_masa_dinas:d.end_masa_dinas||'-',status_masa_dinas:isExpired(d.end_masa_dinas)?'Masa Dinas Habis':'Aktif',status:d.status}))
   const renderDriverForm = (submitLabel, cancelLabel = null) => <form className="form-grid" onSubmit={save} autoComplete="off">
     {isAdmin(work)&&<label>Site<select required value={form.site_id} onChange={e=>setForm({...form,site_id:e.target.value})}><option value="">Pilih site</option>{sites.map(s=><option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}</select></label>}
@@ -336,8 +378,9 @@ function MasterDriver({profile,work}){
     </div>}
     <Panel title="Upload Bulk Master Driver DRD" desc="Template tidak memakai kode unik. Cukup isi site_code, nama_driver, nrp_driver, email/password bila perlu akun, vendor_name bila ada, serta tanggal masa dinas.">
       <style>{'@keyframes srgsSpin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}'}</style>
-      <div className="import-actions"><button className="secondary" disabled={importing} onClick={()=>templateXlsx('template-master-driver-drd.xlsx',[{site_code:'BAYA',nama_driver:'Budi',nrp_driver:'D-001',email:'budi@company.co.id',password:'password123',vendor_name:'PBM',mulai_dinas:'2026-04-01',end_masa_dinas:'2026-05-01',status:'Aktif'}])}><Download size={16}/> Download Template Excel</button><label className="upload-line"><Upload size={16}/> Upload Excel<input type="file" accept=".xlsx,.xls" disabled={importing} onChange={e=>previewFile(e.target.files?.[0])}/></label>{preview.length>0&&<button disabled={importing} onClick={importRows}>{importing?'Mengimpor...':'Submit Import Valid'}</button>}</div>
+      <div className="import-actions"><button className="secondary" disabled={importing||authGenerating} onClick={()=>templateXlsx('template-master-driver-drd.xlsx',[{site_code:'BAYA',nama_driver:'Budi',nrp_driver:'D-001',email:'budi@company.co.id',password:'password123',vendor_name:'PBM',mulai_dinas:'2026-04-01',end_masa_dinas:'2026-05-01',status:'Aktif'}])}><Download size={16}/> Download Template Excel</button><label className="upload-line"><Upload size={16}/> Upload Excel<input type="file" accept=".xlsx,.xls" disabled={importing||authGenerating} onChange={e=>previewFile(e.target.files?.[0])}/></label>{preview.length>0&&<button disabled={importing||authGenerating} onClick={importRows}>{importing?'Mengimpor...':'Submit Import Valid'}</button>}{isAdmin(work)&&<button className="secondary" disabled={importing||authGenerating} onClick={generateMissingDriverAuth}><Users size={16}/> {authGenerating?'Generate Auth...':'Generate Auth Driver Belum Ada'}</button>}</div>
       {importing&&<div className="message" style={{display:'flex',alignItems:'center',gap:10}}><span aria-hidden="true" style={{width:16,height:16,border:'2px solid #bfdbfe',borderTopColor:'#2563eb',borderRadius:'50%',display:'inline-block',animation:'srgsSpin 0.8s linear infinite'}}/><span>Import sedang diproses... {importProgress.current}/{importProgress.total} baris. Mohon tunggu untuk file besar.</span></div>}
+      {authGenerating&&<div className="message" style={{display:'flex',alignItems:'center',gap:10}}><span aria-hidden="true" style={{width:16,height:16,border:'2px solid #bfdbfe',borderTopColor:'#2563eb',borderRadius:'50%',display:'inline-block',animation:'srgsSpin 0.8s linear infinite'}}/><span>Generate auth driver sedang diproses... diproses {authProgress.processed}, auth baru {authProgress.created}, skip {authProgress.skipped}, gagal {authProgress.failed}{authProgress.remaining!==null?`, sisa ${authProgress.remaining}`:''}. Password awal memakai NRP.</span></div>}
       {preview.length>0&&<div className="upload-preview"><DataTable rows={preview}/></div>}
     </Panel>
     <Panel title="Row Data Driver" desc="Aksi edit/delete dibuat rapi dalam satu tabel. Delete akan mengubah status menjadi Nonaktif agar histori tetap aman." action={<button onClick={()=>exportXlsx('master-driver-drd.xlsx',table)}><Download size={16}/> Export</button>}>
