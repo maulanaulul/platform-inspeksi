@@ -124,35 +124,51 @@ function DRD({page,profile,work}){ if(page==='dashboard')return <Dashboard work=
 function Panel({title,desc,action,children}){ return <div className="panel"><div className="panel-head"><div><h2>{title}</h2>{desc&&<p className="muted">{desc}</p>}</div>{action}</div>{children}</div> }
 function DataTable({rows, actions}){ const [q,setQ]=useState(''); if(!rows?.length) return <p className="muted">Belum ada data.</p>; const cols=Object.keys(rows[0]); const filtered=rows.filter(r=>!q||Object.values(r).some(v=>String(v??'').toLowerCase().includes(q.toLowerCase()))); return <div className="data-table-block"><div className="table-search"><Search size={16}/><input placeholder="Search row data..." value={q} onChange={e=>setQ(e.target.value)}/></div><div className="table-wrap"><table className="table"><thead><tr>{cols.map(c=><th key={c}>{c}</th>)}{actions&&<th>AKSI</th>}</tr></thead><tbody>{filtered.map((r,i)=>{const originalIdx=rows.indexOf(r);return <tr key={r.id || i}>{cols.map(c=><td key={c}>{String(r[c]??'')}</td>)}{actions&&<td>{actions(r,originalIdx)}</td>}</tr>})}</tbody></table></div>{filtered.length===0&&<p className="muted">Tidak ada data sesuai pencarian.</p>}</div> }
 
+async function fetchAllPages(buildQuery, pageSize=1000){
+  const rows=[]
+  for(let from=0;;from+=pageSize){
+    const {data,error}=await buildQuery().range(from, from+pageSize-1)
+    if(error) throw error
+    const batch=data||[]
+    rows.push(...batch)
+    if(batch.length<pageSize) break
+  }
+  return rows
+}
+function ScrollTable({rows, actions, height=420}){
+  return <div style={{maxHeight:height,overflow:'auto',border:'1px solid #dbeafe',borderRadius:18,padding:12,background:'#fff'}}><DataTable rows={rows} actions={actions}/></div>
+}
 
-function DashboardDateFilter({ dateFrom, dateTo, setDateFrom, setDateTo, onClear }) {
-  return <Panel title="Filter Tanggal Dashboard" desc="KPI, achievement, chart, dan row data dashboard mengikuti rentang tanggal ini.">
+
+function DashboardDateFilter({ dateFrom, dateTo, setDateFrom, setDateTo, onClear, sites=[], siteFilter='', setSiteFilter, showSiteFilter=false }) {
+  return <Panel title="Filter Dashboard" desc="KPI, achievement, chart, dan row data dashboard mengikuti filter tanggal dan site ini.">
     <div className="form-grid">
       <label>Dari Tanggal<input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} /></label>
       <label>Sampai Tanggal<input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} /></label>
+      {showSiteFilter&&<label>Site<select value={siteFilter} onChange={e=>setSiteFilter(e.target.value)}><option value="">Semua Site</option>{sites.map(s=><option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}</select></label>}
       <button type="button" className="secondary" onClick={onClear}>Reset Filter</button>
     </div>
   </Panel>
 }
 
 function Dashboard({work}){
-  const [drivers,setDrivers]=useState([]), [attempts,setAttempts]=useState([]), [periods,setPeriods]=useState([])
-  const [dateFrom,setDateFrom]=useState(''), [dateTo,setDateTo]=useState('')
-  useEffect(()=>{load()},[work.id,dateFrom,dateTo])
+  const [drivers,setDrivers]=useState([]), [attempts,setAttempts]=useState([]), [periods,setPeriods]=useState([]), [sites,setSites]=useState([])
+  const [dateFrom,setDateFrom]=useState(''), [dateTo,setDateTo]=useState(''), [siteFilter,setSiteFilter]=useState('')
+  useEffect(()=>{load()},[work.id,dateFrom,dateTo,siteFilter])
   async function load(){
-    let dq=supabase.from('drivers').select('*,sites(site_code,site_name)').eq('status','Aktif'); if(!isAdmin(work)) dq=dq.eq('site_id',work.site_id)
-    let aq=supabase.from('drd_attempts').select('*,drivers(site_id,sites(site_code,site_name))').order('created_at',{ascending:false})
-    let pq=supabase.from('drd_induction_periods').select('*,drivers(nama_driver,nrp_driver,site_id,sites(site_code,site_name))').order('created_at',{ascending:false})
-    if(dateFrom){ aq=aq.gte('created_at',dateFrom); pq=pq.gte('created_at',dateFrom) }
-    if(dateTo){ const end=dateTo+'T23:59:59'; aq=aq.lte('created_at',end); pq=pq.lte('created_at',end) }
-    const [{data:d},{data:a},{data:p}] = await Promise.all([
-      dq,
-      aq,
-      pq
+    const admin=isAdmin(work)
+    const buildDrivers=()=>{ let q=supabase.from('drivers').select('*,sites(site_code,site_name),vendors(vendor_name)').eq('status','Aktif').order('created_at',{ascending:false}); if(admin&&siteFilter) q=q.eq('site_id',siteFilter); if(!admin) q=q.eq('site_id',work.site_id); return q }
+    const buildAttempts=()=>{ let q=supabase.from('drd_attempts').select('*,drivers(site_id,nama_driver,nrp_driver,email,sites(site_code,site_name))').order('created_at',{ascending:false}); if(dateFrom) q=q.gte('created_at',dateFrom); if(dateTo) q=q.lte('created_at',dateTo+'T23:59:59'); return q }
+    const buildPeriods=()=>{ let q=supabase.from('drd_induction_periods').select('*,drivers(nama_driver,nrp_driver,site_id,sites(site_code,site_name))').order('created_at',{ascending:false}); if(dateFrom) q=q.gte('created_at',dateFrom); if(dateTo) q=q.lte('created_at',dateTo+'T23:59:59'); return q }
+    const [d,a,p,s]=await Promise.all([
+      fetchAllPages(buildDrivers),
+      fetchAllPages(buildAttempts),
+      fetchAllPages(buildPeriods),
+      admin ? fetchAllPages(()=>supabase.from('sites').select('id,site_code,site_name').order('site_code')) : Promise.resolve([])
     ])
-    const scopedAttempts=(a||[]).filter(r=>isAdmin(work)||r.drivers?.site_id===work.site_id)
-    const scopedPeriods=(p||[]).filter(r=>isAdmin(work)||r.drivers?.site_id===work.site_id)
-    setDrivers(d||[]); setAttempts(scopedAttempts); setPeriods(scopedPeriods)
+    const scopedAttempts=(a||[]).filter(r=>admin ? (!siteFilter || r.drivers?.site_id===siteFilter) : r.drivers?.site_id===work.site_id)
+    const scopedPeriods=(p||[]).filter(r=>admin ? (!siteFilter || r.drivers?.site_id===siteFilter) : r.drivers?.site_id===work.site_id)
+    setDrivers(d||[]); setAttempts(scopedAttempts); setPeriods(scopedPeriods); if(admin) setSites(s||[])
   }
   const latestDrd=new Map(); attempts.filter(a=>(a.test_type||'DRD')==='DRD').forEach(a=>{ if(!latestDrd.has(a.driver_id)) latestDrd.set(a.driver_id,a) })
   const drdOk=drivers.filter(d=>{ const a=latestDrd.get(d.id); return a?.status==='Lulus' && (!a.valid_until || a.valid_until>=today()) }).length
@@ -168,8 +184,11 @@ function Dashboard({work}){
   const bySite={}; drivers.forEach(d=>{ const code=d.sites?.site_code||'-'; bySite[code]??={site:code,total:0,drd_ok:0,drd_belum:0,achievement:0}; bySite[code].total++; const a=latestDrd.get(d.id); if(a?.status==='Lulus'&&(!a.valid_until||a.valid_until>=today())) bySite[code].drd_ok++ })
   Object.values(bySite).forEach(x=>{ x.drd_belum=x.total-x.drd_ok; x.achievement=x.total?Math.round(x.drd_ok/x.total*100):0 })
   const siteRows=Object.values(bySite).sort((a,b)=>b.achievement-a.achievement)
+  const driverDrdRows=drivers.map(d=>{ const a=latestDrd.get(d.id); const valid=a?.status==='Lulus' && (!a.valid_until || a.valid_until>=today()); return {site:d.sites?.site_code||'-', nama_driver:d.nama_driver, nrp_driver:d.nrp_driver, email:d.email||'-', vendor:d.vendors?.vendor_name||'-', status_drd:valid?'Sudah DRD':'Belum DRD', nilai:a?.score ?? '-', tanggal_test:a?.submitted_at ? String(a.submitted_at).slice(0,10) : '-', valid_until:a?.valid_until||'-'} })
+  const sudahDrdRows=driverDrdRows.filter(r=>r.status_drd==='Sudah DRD').sort((a,b)=>String(a.site).localeCompare(String(b.site))||String(a.nama_driver).localeCompare(String(b.nama_driver)))
+  const belumDrdRows=driverDrdRows.filter(r=>r.status_drd==='Belum DRD').sort((a,b)=>String(a.site).localeCompare(String(b.site))||String(a.nama_driver).localeCompare(String(b.nama_driver)))
   const inductionRows=periods.map(p=>({ driver:p.drivers?.nama_driver, nrp:p.drivers?.nrp_driver, site:p.drivers?.sites?.site_code, cuti_mulai:p.cuti_start_date, onsite:p.onsite_date, status:p.status, alert:isOnsiteDue(p)?'Open - Wajib Induksi':'-' }))
-  return <div className="stack"><DashboardDateFilter dateFrom={dateFrom} dateTo={dateTo} setDateFrom={setDateFrom} setDateTo={setDateTo} onClear={()=>{setDateFrom('');setDateTo('')}}/><div className="kpi-grid"><Kpi title="Total Driver" value={total} icon={<Truck/>}/><Kpi title="Sudah DRD" value={drdOk} icon={<CheckCircle2/>}/><Kpi title="Belum DRD" value={drdBelum} icon={<AlertTriangle/>}/><Kpi title="Achievement DRD" value={`${drdAch}%`} icon={<BarChart3/>}/><Kpi title="Open Induksi" value={openInduksi} icon={<Video/>}/><Kpi title="Induksi Closed" value={closedInduksi} icon={<ShieldCheck/>}/><Kpi title="Achievement Induksi" value={`${inductionAch}%`} icon={<Award/>}/><Kpi title="Masa Dinas Habis" value={drivers.filter(d=>isExpired(d.end_masa_dinas)).length} icon={<CalendarCheck/>}/></div><Panel title="Dashboard DRD per Site" desc="Pencapaian DRD dihitung dari driver aktif yang sudah lulus dan belum expired." action={<button onClick={()=>exportXlsx('achievement-drd-site.xlsx',siteRows)}><Download size={16}/> Export</button>}><div className="site-chart">{siteRows.map(r=><div className="site-bar" key={r.site}><div className="site-meta"><b>{r.site}</b><span>{r.drd_ok}/{r.total} · {r.achievement}%</span></div><div className="bar"><span style={{width:`${Math.min(r.achievement,100)}%`}}/></div></div>)}</div><DataTable rows={siteRows}/></Panel><Panel title="Dashboard Induksi Driver" desc="Driver yang sudah onsite setelah cuti tetapi belum lulus induksi dihitung Open dan mengurangi achievement induksi site." action={<button onClick={()=>exportXlsx('dashboard-induksi-driver.xlsx',inductionRows)}><Download size={16}/> Export</button>}><div className="summary-strip"><span><b>{inductionTarget}</b> Wajib Induksi</span><span><b>{openPeriodInput}</b> Butuh Input Periode</span><span><b>{openInduksi}</b> Open Induksi</span><span><b>{closedInduksi}</b> Closed</span><span><b>{inductionAch}%</b> Achievement</span></div><DataTable rows={inductionRows}/></Panel></div>
+  return <div className="stack"><DashboardDateFilter dateFrom={dateFrom} dateTo={dateTo} setDateFrom={setDateFrom} setDateTo={setDateTo} sites={sites} siteFilter={siteFilter} setSiteFilter={setSiteFilter} showSiteFilter={isAdmin(work)} onClear={()=>{setDateFrom('');setDateTo('');setSiteFilter('')}}/><div className="kpi-grid"><Kpi title="Total Driver" value={total} icon={<Truck/>}/><Kpi title="Sudah DRD" value={drdOk} icon={<CheckCircle2/>}/><Kpi title="Belum DRD" value={drdBelum} icon={<AlertTriangle/>}/><Kpi title="Achievement DRD" value={`${drdAch}%`} icon={<BarChart3/>}/><Kpi title="Open Induksi" value={openInduksi} icon={<Video/>}/><Kpi title="Induksi Closed" value={closedInduksi} icon={<ShieldCheck/>}/><Kpi title="Achievement Induksi" value={`${inductionAch}%`} icon={<Award/>}/><Kpi title="Masa Dinas Habis" value={drivers.filter(d=>isExpired(d.end_masa_dinas)).length} icon={<CalendarCheck/>}/></div><Panel title="Dashboard DRD per Site" desc="Pencapaian DRD dihitung dari driver aktif yang sudah lulus dan belum expired." action={<button onClick={()=>exportXlsx('achievement-drd-site.xlsx',siteRows)}><Download size={16}/> Export</button>}><div className="site-chart">{siteRows.map(r=><div className="site-bar" key={r.site}><div className="site-meta"><b>{r.site}</b><span>{r.drd_ok}/{r.total} · {r.achievement}%</span></div><div className="bar"><span style={{width:`${Math.min(r.achievement,100)}%`}}/></div></div>)}</div><ScrollTable rows={siteRows} height={320}/></Panel><Panel title="Driver Sudah DRD" desc="Driver aktif yang sudah lulus DRD dan valid_until belum expired." action={<button onClick={()=>exportXlsx('driver-sudah-drd.xlsx',sudahDrdRows)}><Download size={16}/> Export</button>}><ScrollTable rows={sudahDrdRows} height={360}/></Panel><Panel title="Driver Belum DRD" desc="Driver aktif yang belum pernah lulus DRD atau masa berlaku DRD-nya sudah expired." action={<button onClick={()=>exportXlsx('driver-belum-drd.xlsx',belumDrdRows)}><Download size={16}/> Export</button>}><ScrollTable rows={belumDrdRows} height={420}/></Panel><Panel title="Dashboard Induksi Driver" desc="Driver yang sudah onsite setelah cuti tetapi belum lulus induksi dihitung Open dan mengurangi achievement induksi site." action={<button onClick={()=>exportXlsx('dashboard-induksi-driver.xlsx',inductionRows)}><Download size={16}/> Export</button>}><div className="summary-strip"><span><b>{inductionTarget}</b> Wajib Induksi</span><span><b>{openPeriodInput}</b> Butuh Input Periode</span><span><b>{openInduksi}</b> Open Induksi</span><span><b>{closedInduksi}</b> Closed</span><span><b>{inductionAch}%</b> Achievement</span></div><ScrollTable rows={inductionRows} height={360}/></Panel></div>
 }
 function Kpi({title,value,icon}){ return <div className="kpi"><div><span>{title}</span><strong>{value}</strong></div><div className="kpi-icon">{icon}</div></div> }
 
