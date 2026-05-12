@@ -10,14 +10,16 @@ import {
 import * as XLSX from 'xlsx'
 import DrdDriverApp from './DrdDriverApp.jsx'
 import InspeksiUnitApp from './InspeksiUnitApp.jsx'
+import FoodIndexApp from './FoodIndexApp.jsx'
 import logoSrgs from './assets/logo-icon.png'
 import loginScene from './assets/login-scene.png'
 import roleScene from './assets/role-scene.png'
 import './styles.css'
 
-const APP_ICONS = { sidak_fatigue: '🚦', drd_driver: '🧠', inspeksi_unit: '🚚', inspeksi: '🚚' }
+const APP_ICONS = { sidak_fatigue: '🚦', drd_driver: '🧠', inspeksi_unit: '🚚', inspeksi: '🚚', food_index: '🍽️' }
 function normalizeAppCode(code = '') {
   const c = String(code || '').toLowerCase()
+  if (c.includes('food') || c.includes('catering')) return 'food_index'
   if (c.includes('drd')) return 'drd_driver'
   if (c.includes('inspeksi')) return 'inspeksi_unit'
   if (c.includes('sidak') || c.includes('fatigue')) return 'sidak_fatigue'
@@ -408,6 +410,7 @@ function Shell({ profile, context, setContext }) {
 
   if (appCode === 'drd_driver') return <DrdDriverApp embeddedProfile={profile} embeddedWork={context} onChangeApp={() => setContext(null)} />
   if (appCode === 'inspeksi_unit') return <InspeksiUnitApp embeddedProfile={profile} embeddedContext={context} onChangeApp={() => setContext(null)} />
+  if (appCode === 'food_index') return <FoodIndexApp embeddedProfile={profile} embeddedContext={context} onChangeApp={() => setContext(null)} />
 
   return <div className="app-shell redesign-shell real-ui-shell">
     {sidebar && <button className="mobile-nav-backdrop" aria-label="Tutup navigasi" onClick={()=>setSidebar(false)} />}
