@@ -22,6 +22,7 @@ type Body = {
 }
 
 const ADMIN_ROLES = ['Platform Admin', 'App Admin']
+const SITE_DRIVER_CREATOR_ROLES = ['GL', 'Atasan Site', 'Site Admin', 'Admin Site']
 
 function validEmail(email: string) {
   return /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/.test(email)
@@ -97,25 +98,48 @@ serve(async (req) => {
       await admin.from('users_profile').update({ auth_user_id: authData.user.id }).eq('id', callerProfile.id)
     }
 
-    const { data: callerAccess, error: accessError } = await admin
-      .from('user_app_access')
-      .select('role, status')
-      .eq('user_id', callerProfile.id)
-      .eq('status', 'Aktif')
-    if (accessError) throw accessError
-    const isAdmin = (callerAccess || []).some((a: any) => ADMIN_ROLES.includes(a.role))
-    if (!isAdmin) throw new Error('Forbidden: hanya Platform Admin / App Admin yang boleh membuat user')
-
     const body = await req.json() as Body
     const email = String(body.email || '').trim().toLowerCase()
     const password = String(body.password || '')
     const nama = String(body.nama || email).trim()
     const nrp = String(body.nrp || '').trim()
+
+    const { data: callerAccess, error: accessError } = await admin
+      .from('user_app_access')
+      .select('role, status, app_id, site_id')
+      .eq('user_id', callerProfile.id)
+      .eq('status', 'Aktif')
+    if (accessError) throw accessError
+
+    const accessRows = callerAccess || []
+    const isPlatformOrAppAdmin = accessRows.some((a: any) => ADMIN_ROLES.includes(String(a.role || '').trim()))
+    const isSiteDriverCreator =
+      body.role === 'Driver' &&
+      !!body.app_id &&
+      !!body.site_id &&
+      accessRows.some((a: any) =>
+        SITE_DRIVER_CREATOR_ROLES.includes(String(a.role || '').trim()) &&
+        String(a.app_id || '') === String(body.app_id || '') &&
+        String(a.site_id || '') === String(body.site_id || '')
+      )
+
+    if (!isPlatformOrAppAdmin && !isSiteDriverCreator) {
+      throw new Error('Forbidden: hanya Platform Admin / App Admin, atau admin site di site yang sama yang boleh membuat auth Driver')
+    }
     if (!email) throw new Error('Email wajib diisi')
     if (!validEmail(email)) throw new Error('Format email tidak valid. Gunakan format nama@domain.com.')
     if (!password || password.length < 6) throw new Error('Password minimal 6 karakter')
     if (!body.app_id) throw new Error('Aplikasi wajib dipilih')
     if (!body.role) throw new Error('Role wajib dipilih')
+
+    const { data: targetApp, error: targetAppError } = await admin
+      .from('applications')
+      .select('id, app_code, app_name, status')
+      .eq('id', body.app_id)
+      .maybeSingle()
+    if (targetAppError) throw targetAppError
+    if (!targetApp) throw new Error('Aplikasi tidak ditemukan. Cek mapping applications/app_id.')
+    if (String(targetApp.status || '').toLowerCase() === 'nonaktif') throw new Error('Aplikasi sedang nonaktif.')
     if (email === String(callerEmail || '').toLowerCase()) throw new Error('Email user baru tidak boleh sama dengan email admin yang sedang login. Gunakan tambah mapping user existing untuk akun admin.')
 
     let authAction = 'existing_user'
@@ -174,7 +198,9 @@ serve(async (req) => {
       }
     }
 
-    return new Response(JSON.stringify({ ok: true, auth_user_id: authUser.id, profile, mapping, auth_action: authAction, mapping_action: mappingAction }), {
+    if (!authUser?.id) throw new Error('Supabase Auth tidak mengembalikan auth user id.')
+
+    return new Response(JSON.stringify({ ok: true, auth_user_id: authUser.id, profile, mapping, app: targetApp, auth_action: authAction, mapping_action: mappingAction }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       status: 200,
     })

@@ -1267,7 +1267,9 @@ function AccessMapping({ context, profile }){
       const { data, error } = await supabase.functions.invoke('admin-create-user', { body: payload })
       if(error) throw error
       if(data?.error) throw new Error(data.error)
-      setMessage(`User ${payload.email} berhasil dibuat dan dimapping.`)
+      if(!data?.ok) throw new Error('Admin create user tidak mengembalikan status OK dari Edge Function.')
+      if(!data?.auth_user_id) throw new Error('User belum terbuat di Supabase Auth. Deploy ulang Edge Function admin-create-user versi terbaru lalu coba lagi.')
+      setMessage(`User ${payload.email} berhasil dibuat di Supabase Auth dan dimapping. Auth ID: ${data.auth_user_id}`)
       resetNewUser(); await load()
     }catch(err){ setMessage(err.message || String(err)) }
     finally{ setLoading(false) }
