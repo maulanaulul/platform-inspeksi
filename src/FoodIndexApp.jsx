@@ -3,7 +3,7 @@ import { supabase } from './lib/supabase'
 import {
   AlertTriangle, BarChart3, Building2, CalendarCheck, CheckCircle2, ClipboardCheck,
   Download, FileSpreadsheet, LayoutDashboard, LogOut, Menu, Search, ShieldCheck,
-  Store, Upload, Users, X
+  Store, Upload, Users, X, Camera, Image as ImageIcon
 } from 'lucide-react'
 import * as XLSX from 'xlsx'
 
@@ -676,6 +676,33 @@ function FoodIndexScopedStyles(){
       }
     }
 
+    /* v47 targeted fixes */
+    .food-index-app .standard-meta { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+    .food-index-app .standard-meta span { display:inline-flex; align-items:center; min-height:28px; padding:6px 10px; border-radius:999px; background:#eef6ff; color:#1e40af; font-size:12px; font-weight:700; }
+    .food-index-app .standard-box { margin-top:10px; padding:10px 12px; border-radius:14px; border:1px solid #dbeafe; background:#f8fbff; color:#334155; font-size:13px; line-height:1.45; }
+    .food-index-app .camera-options { display:grid; grid-template-columns:1fr 1fr; gap:8px; width:100%; margin-top:8px; }
+    .food-index-app .camera-option { min-height:44px !important; border-radius:14px !important; padding:0 10px !important; box-shadow:none !important; background:#ffffff !important; color:#1d4ed8 !important; border:1px solid #bfdbfe !important; font-size:12px !important; display:flex !important; align-items:center !important; justify-content:center !important; gap:6px !important; }
+    .food-index-app .status-task-cell { min-width:150px; max-width:180px; white-space:normal; }
+    .food-index-app .status-task-cell .status-pill { white-space:normal; text-align:center; line-height:1.2; }
+    .food-index-app .inspection-item.finding.approval-review-finding { background:linear-gradient(180deg,#fee2e2,#fff5f5) !important; border-color:#ef4444 !important; box-shadow:0 12px 34px rgba(239,68,68,.16) !important; }
+    .food-index-app .approval-review-finding .param-index { background:#ef4444 !important; color:white !important; }
+    .food-index-app .dashboard-admin-filters { display:grid; grid-template-columns:repeat(4,minmax(150px,1fr)) auto; gap:12px; align-items:end; margin-top:18px; }
+    .food-index-app .dashboard-admin-filters label { display:grid; gap:7px; font-weight:700; color:#334155; font-size:13px; }
+    .food-index-app .dashboard-admin-filters select { height:48px; border-radius:16px; border:1px solid #bfdbfe; background:white; padding:0 12px; font-weight:700; }
+    .food-index-app .dashboard-analysis-grid { display:grid; grid-template-columns:1fr; gap:18px; margin-top:20px; }
+    .food-index-app .analysis-table table { min-width:1200px; }
+    .food-index-app .score-badge { display:inline-flex; padding:7px 11px; border-radius:999px; font-weight:800; font-size:12px; }
+    .food-index-app .score-badge.ok { background:#dcfce7; color:#166534; }
+    .food-index-app .score-badge.bad { background:#fee2e2; color:#991b1b; }
+    @media (max-width: 760px) {
+      .food-index-app .food-modal-backdrop { align-items:flex-start !important; overflow:auto !important; padding:10px !important; }
+      .food-index-app .food-inspection-modal { width:100% !important; max-height:none !important; min-height:calc(100dvh - 20px); overflow:visible !important; }
+      .food-index-app .inspection-scroll { max-height:none !important; overflow:visible !important; }
+      .food-index-app .sticky-actions { position:sticky; bottom:0; }
+      .food-index-app .dashboard-admin-filters { grid-template-columns:1fr; }
+      .food-index-app .camera-options { grid-template-columns:1fr; }
+    }
+
 
   `}</style>
 }
@@ -706,50 +733,71 @@ function applySiteFilter(query, context, field='site_id'){
 }
 
 function FoodDashboard({ context }){
+  const now = new Date()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [siteFilter, setSiteFilter] = useState('')
+  const [weekFilter, setWeekFilter] = useState(startOfWeekMonday(now))
+  const [monthFilter, setMonthFilter] = useState(String(now.getMonth() + 1).padStart(2, '0'))
+  const [yearFilter, setYearFilter] = useState(String(now.getFullYear()))
   const [sites, setSites] = useState([])
+  const [vendors, setVendors] = useState([])
   const [tasks, setTasks] = useState([])
   const [outs, setOuts] = useState([])
-  const monday = startOfWeekMonday()
-  const weekEnd = endOfWeekSunday(monday)
+  const [parameters, setParameters] = useState([])
+  const weekEnd = endOfWeekSunday(weekFilter)
   const thursdayAlert = new Date().getDay() >= 4 || new Date().getDay() === 0
 
-  useEffect(() => { load() }, [context?.id, siteFilter])
+  useEffect(() => { load() }, [context?.id, siteFilter, weekFilter, monthFilter, yearFilter])
+
   async function load(){
     setLoading(true); setError('')
     try {
       if (adminCanSeeAll(context)) setSites(await fetchSites())
+      const monthStart = `${yearFilter}-${monthFilter}-01`
+      const monthEndDate = new Date(Number(yearFilter), Number(monthFilter), 0).toISOString().slice(0,10)
       let tq = supabase
         .from('food_weekly_tasks')
-        .select('*, sites(site_code,site_name), food_vendors(vendor_name)')
-        .eq('week_start_date', monday)
-        .order('generated_at', { ascending:false })
+        .select(`
+          *,
+          sites(site_code,site_name),
+          food_vendors(id,vendor_name),
+          food_inspection_answers(id, score, finding_note, evidence_photo_url, food_parameters(category, parameter_text, sort_order)),
+          food_findings(id, due_date, corrective_action, preventive_action, status)
+        `)
+        .gte('week_start_date', monthStart)
+        .lte('week_start_date', monthEndDate)
+        .order('week_start_date', { ascending:false })
       let oq = supabase
         .from('food_outstandings')
         .select('*, food_findings(corrective_action, preventive_action, due_date, food_inspection_answers(finding_note, evidence_photo_url, food_parameters(parameter_text)), food_weekly_tasks(week_start_date, submitted_at, approved_at, sites(site_code,site_name), food_vendors(vendor_name)))')
         .order('created_at', { ascending:false })
-        .limit(500)
+        .limit(1000)
+      let vq = supabase.from('food_vendors').select('id, site_id, vendor_name, status').eq('status','Aktif')
+      let pq = supabase.from('food_parameters').select('id').eq('status','Aktif')
       tq = applySiteFilter(tq, context)
+      vq = applySiteFilter(vq, context)
       if (!adminCanSeeAll(context)) oq = oq.eq('task_id', '00000000-0000-0000-0000-000000000000')
-      if (adminCanSeeAll(context) && siteFilter) tq = tq.eq('site_id', siteFilter)
-      const [{ data:t, error:te }, { data:o, error:oe }] = await Promise.all([tq, oq])
+      if (adminCanSeeAll(context) && siteFilter) { tq = tq.eq('site_id', siteFilter); vq = vq.eq('site_id', siteFilter) }
+      const [{ data:t, error:te }, { data:o, error:oe }, { data:v, error:ve }, { data:p, error:pe }] = await Promise.all([tq, oq, vq, pq])
       if (te) throw te
+      if (ve) throw ve
+      if (pe) throw pe
       if (oe && adminCanSeeAll(context)) throw oe
       setTasks(t || [])
       setOuts(adminCanSeeAll(context) ? (o || []) : [])
+      setVendors(v || [])
+      setParameters(p || [])
     } catch(e){ setError(e.message) }
     setLoading(false)
   }
 
-  const total = tasks.length
-  const approved = tasks.filter(t => t.status === 'Approved').length
-  const open = tasks.filter(t => ['Open','In Progress','Need Action Plan'].includes(t.status)).length
-  const waiting = tasks.filter(t => t.status === 'Waiting Approval').length
-  const expired = tasks.filter(t => t.status === 'Expired').length
+  const weekTasks = tasks.filter(t => t.week_start_date === weekFilter)
+  const total = weekTasks.length
+  const approved = weekTasks.filter(t => t.status === 'Approved').length
+  const expired = weekTasks.filter(t => t.status === 'Expired').length
   const achievement = total ? Math.round((approved / total) * 100) : 0
-  const alertRows = tasks.filter(t => thursdayAlert && ['Open','In Progress','Need Action Plan'].includes(t.status))
+  const alertRows = weekTasks.filter(t => thursdayAlert && ['Open','In Progress','Need Action Plan'].includes(t.status))
   const reportRows = outs.slice(0, 8).map((o, idx) => {
     const f = o.food_findings || {}
     const answer = f.food_inspection_answers || {}
@@ -768,19 +816,77 @@ function FoodDashboard({ context }){
     }
   })
 
+  const scoreRows = tasks.filter(t => t.submitted_at || t.approved_at || t.status === 'Approved').map((t, idx) => {
+    const answers = t.food_inspection_answers || []
+    const totalParam = answers.length || parameters.length || 0
+    const ok = answers.filter(a => Number(a.score) === 1).length
+    const score = totalParam ? Math.round((ok / totalParam) * 100) : 0
+    return {
+      no: idx + 1,
+      site: t.sites?.site_code || '-',
+      vendor: t.food_vendors?.vendor_name || '-',
+      minggu: `${t.week_start_date} s/d ${t.week_end_date}`,
+      parameter: totalParam,
+      sesuai: ok,
+      temuan: answers.filter(a => Number(a.score) === 0).length,
+      score: `${score}%`,
+      remark: score >= 95 ? 'Tercapai' : 'Tidak tercapai',
+      status: t.status
+    }
+  })
+  const vendorCount = vendors.length
+  const inspectedVendorIds = new Set(tasks.filter(t => ['Waiting Approval','Approved','Need Action Plan'].includes(t.status) || t.submitted_at).map(t => t.vendor_id))
+  const executionScore = vendorCount ? Math.round((inspectedVendorIds.size / vendorCount) * 100) : 0
+  const executionRows = [{
+    bulan: `${monthFilter}-${yearFilter}`,
+    site: siteFilter ? sites.find(s => s.id === siteFilter)?.site_code || 'Site terpilih' : adminCanSeeAll(context) ? 'Semua Site' : contextSiteName(context),
+    total_vendor_aktif: vendorCount,
+    vendor_sudah_inspeksi: inspectedVendorIds.size,
+    skor_pelaksanaan: `${executionScore}%`,
+    remark: executionScore >= 100 ? 'Tercapai' : 'Tidak tercapai'
+  }]
+  const leadtimeRows = outs.filter(o => o.food_findings?.due_date).map((o, idx) => {
+    const f = o.food_findings || {}
+    const task = f.food_weekly_tasks || {}
+    const closedDate = o.closed_at?.slice(0,10) || ''
+    const due = f.due_date || ''
+    const onTime = closedDate ? closedDate <= due : today() <= due
+    return {
+      no: idx + 1,
+      site: task.sites?.site_code || '-',
+      vendor: task.food_vendors?.vendor_name || '-',
+      parameter: f.food_inspection_answers?.food_parameters?.parameter_text || '-',
+      due_date: due || '-',
+      tanggal_close: closedDate || '-',
+      status: o.status === 'Closed' ? 'Closed' : 'Open',
+      remark: onTime ? 'Tercapai' : 'Tidak tercapai'
+    }
+  })
+
+  const years = Array.from({ length: 6 }, (_, i) => String(now.getFullYear() - i))
+  const monthOptions = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0'))
+  const weekOptions = []
+  for (let d = new Date(Number(yearFilter), Number(monthFilter) - 1, 1); d.getMonth() === Number(monthFilter) - 1; d.setDate(d.getDate() + 7)) {
+    weekOptions.push(startOfWeekMonday(new Date(d)))
+  }
+  if (!weekOptions.includes(weekFilter)) weekOptions.unshift(weekFilter)
+
   return <div className="food-dashboard-v43">
     {error && <div className="error">{error}</div>}
     <div className="dashboard-filter-card">
       <div>
         <small>Scope dashboard</small>
         <h3>{siteFilter ? sites.find(s => s.id === siteFilter)?.site_code || 'Site terpilih' : 'Semua site'}</h3>
-        <p>Dashboard mengikuti minggu berjalan. Achievement hanya bertambah setelah inspeksi full approved.</p>
+        <p>Dashboard mengikuti filter week, bulan, tahun, dan site. Achievement hanya bertambah setelah inspeksi full approved.</p>
       </div>
-      <div className="dashboard-filter-actions">
-        {adminCanSeeAll(context) && <label>Filter Site<select value={siteFilter} onChange={e=>setSiteFilter(e.target.value)}><option value="">Semua Site</option>{sites.map(s=><option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}</select></label>}
+      <div className="dashboard-admin-filters">
+        <label>Week<select value={weekFilter} onChange={e=>setWeekFilter(e.target.value)}>{weekOptions.map(w=><option key={w} value={w}>{w} s/d {endOfWeekSunday(w)}</option>)}</select></label>
+        <label>Bulan<select value={monthFilter} onChange={e=>setMonthFilter(e.target.value)}>{monthOptions.map(m=><option key={m} value={m}>{m}</option>)}</select></label>
+        <label>Tahun<select value={yearFilter} onChange={e=>setYearFilter(e.target.value)}>{years.map(y=><option key={y} value={y}>{y}</option>)}</select></label>
+        {adminCanSeeAll(context) && <label>Site<select value={siteFilter} onChange={e=>setSiteFilter(e.target.value)}><option value="">Semua Site</option>{sites.map(s=><option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}</select></label>}
         <button onClick={load}>⟳ Refresh</button>
       </div>
-      <div className="dashboard-tags"><span>Site: {siteFilter ? sites.find(s => s.id === siteFilter)?.site_code || 'Terpilih' : 'Semua site'}</span><span>Minggu: {monday} s/d {weekEnd}</span>{thursdayAlert && <span>Alert Kamis aktif</span>}</div>
+      <div className="dashboard-tags"><span>Site: {siteFilter ? sites.find(s => s.id === siteFilter)?.site_code || 'Terpilih' : 'Semua site'}</span><span>Minggu: {weekFilter} s/d {weekEnd}</span>{thursdayAlert && <span>Alert Kamis aktif</span>}</div>
     </div>
 
     <div className="dashboard-kpi-grid">
@@ -790,13 +896,27 @@ function FoodDashboard({ context }){
       <div className="dash-kpi"><small>Expired</small><strong>{expired}</strong><span className="red">Impact achievement</span></div>
     </div>
 
+    {adminCanSeeAll(context) && <div className="dashboard-analysis-grid">
+      <section className="dashboard-card analysis-table">
+        <div className="dashboard-card-head"><div><h3>Score Food Index per Inspeksi</h3><p>Dihitung dari jumlah parameter sesuai dibanding total parameter inspeksi. Score ≥ 95% = Tercapai.</p></div><button onClick={()=>downloadXlsx('score-food-index.xlsx', scoreRows)}>Export</button></div>
+        <Table rows={scoreRows} columns={['no','site','vendor','minggu','parameter','sesuai','temuan','score','remark','status']} empty="Belum ada inspeksi pada filter ini." />
+      </section>
+      <section className="dashboard-card analysis-table">
+        <div className="dashboard-card-head"><div><h3>Skor Pelaksanaan Inspeksi</h3><p>Jumlah vendor yang sudah diinspeksi dibagi jumlah vendor aktif pada bulan terpilih.</p></div><button onClick={()=>downloadXlsx('skor-pelaksanaan-inspeksi.xlsx', executionRows)}>Export</button></div>
+        <Table rows={executionRows} />
+      </section>
+      <section className="dashboard-card analysis-table">
+        <div className="dashboard-card-head"><div><h3>Leadtime Perbaikan</h3><p>Remark Tercapai jika close outstanding tidak melewati due date. Jika lewat due date, Tidak tercapai.</p></div><button onClick={()=>downloadXlsx('leadtime-perbaikan-food-index.xlsx', leadtimeRows)}>Export</button></div>
+        <Table rows={leadtimeRows} empty="Belum ada due date perbaikan." />
+      </section>
+    </div>}
+
     <div className="dashboard-main-grid">
       <section className="dashboard-card report-preview-card">
         <div className="dashboard-card-head">
           <div><h3>Report Temuan Food Index</h3><p>Hanya menampilkan parameter yang memiliki temuan. Siap untuk view dan export Excel.</p></div>
           <button onClick={()=>downloadXlsx('food-index-report-temuan-preview.xlsx', reportRows)}><Download size={16}/> Export Excel</button>
         </div>
-        <div className="report-filter-row"><input placeholder="Search row data..." readOnly /><select value={siteFilter} onChange={e=>setSiteFilter(e.target.value)} disabled={!adminCanSeeAll(context)}><option value="">Semua Site</option>{sites.map(s=><option key={s.id} value={s.id}>{s.site_code}</option>)}</select><select disabled><option>Semua Status</option></select></div>
         <div className="dashboard-table-wrap">
           <table>
             <thead><tr><th>No</th><th>Parameter Checklist</th><th>Caption Temuan</th><th>Tgl Inspeksi</th><th>Corrective Action</th><th>Preventive Action</th><th>Due Date</th><th>Foto Corrective</th><th>Foto Preventive</th><th>Status</th></tr></thead>
@@ -815,13 +935,9 @@ function FoodDashboard({ context }){
         </div>
       </aside>
     </div>
-
-    <section className="dashboard-card task-row-card">
-      <div className="dashboard-card-head"><div><h3>Row Data Task Minggu Ini</h3><p>Task otomatis berdasarkan vendor catering aktif per site.</p></div><button onClick={()=>downloadXlsx('food-index-task-minggu-ini.xlsx', tasks.map(t=>({ site:t.sites?.site_code, vendor:t.food_vendors?.vendor_name, minggu:t.week_start_date, status:t.status, mulai:t.started_at?.slice(0,10), submit:t.submitted_at?.slice(0,10), approved:t.approved_at?.slice(0,10) })))}><Download size={16}/> Export</button></div>
-      {loading ? <p>Memuat...</p> : <Table rows={tasks.map(t => ({ site:t.sites?.site_code, vendor:t.food_vendors?.vendor_name, minggu:t.week_start_date, status:t.status, mulai:t.started_at?.slice(0,10), submit:t.submitted_at?.slice(0,10), approved:t.approved_at?.slice(0,10) }))} />}
-    </section>
   </div>
 }
+
 function FoodVendors({ context }){
   const [sites, setSites] = useState([])
   const [vendors, setVendors] = useState([])
@@ -905,7 +1021,7 @@ function FoodVendors({ context }){
 
 function FoodParameters({ context }){
   const [rows, setRows] = useState([])
-  const [form, setForm] = useState({ category:'General', parameter_text:'', sort_order:1, status:'Aktif' })
+  const [form, setForm] = useState({ category:'General', parameter_text:'', standard_parameter:'', hazard_code:'', behavior:'', sort_order:1, status:'Aktif' })
   const [preview, setPreview] = useState([])
   const [msg, setMsg] = useState('')
   const [error, setError] = useState('')
@@ -919,47 +1035,69 @@ function FoodParameters({ context }){
     e.preventDefault(); setMsg(''); setError('')
     try {
       if (!cleanText(form.parameter_text)) throw new Error('Parameter wajib diisi.')
-      const { error } = await supabase.from('food_parameters').insert({ ...form, sort_order: Number(form.sort_order) || 1 })
+      const payload = {
+        category: cleanText(form.category) || 'General',
+        parameter_text: cleanText(form.parameter_text),
+        standard_parameter: cleanText(form.standard_parameter) || null,
+        hazard_code: cleanText(form.hazard_code) || null,
+        behavior: cleanText(form.behavior) || null,
+        sort_order: Number(form.sort_order) || 1,
+        status: form.status || 'Aktif'
+      }
+      const { error } = await supabase.from('food_parameters').insert(payload)
       if (error) throw error
-      setForm({ category:'General', parameter_text:'', sort_order:(rows.length+2), status:'Aktif' })
+      setForm({ category:'General', parameter_text:'', standard_parameter:'', hazard_code:'', behavior:'', sort_order:(rows.length+2), status:'Aktif' })
       setMsg('Parameter berhasil disimpan.'); load()
     } catch(e){ setError(e.message) }
   }
-  function downloadTemplate(){ downloadXlsx('template-master-parameter-food-index.xlsx', [{ category:'Kebersihan', parameter_text:'Area penyajian bersih dan rapi', sort_order:1, status:'Aktif' }]) }
+  function downloadTemplate(){ downloadXlsx('template-master-parameter-food-index.xlsx', [{ category:'Kebersihan', parameter_text:'Area penyajian bersih dan rapi', standard_parameter:'Area bebas sampah, lantai kering, tidak licin', hazard_code:'FIP-HAZ-01', behavior:'Housekeeping dan hygiene vendor', sort_order:1, status:'Aktif' }]) }
   async function parseExcel(file){
     const buf = await file.arrayBuffer()
     const wb = XLSX.read(buf)
     const items = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]).map(normalizeRow).map((r, idx) => {
       const parameter_text = cleanText(getVal(r, ['parameter_text','PARAMETER_TEXT','parameter','Parameter','soal','Soal']))
-      return { row:idx+2, category:cleanText(getVal(r, ['category','CATEGORY','kategori','Kategori'])) || 'General', parameter_text, sort_order:Number(getVal(r, ['sort_order','SORT_ORDER','urutan','Urutan'])) || idx+1, status:cleanText(getVal(r, ['status','STATUS'])) || 'Aktif', error: parameter_text ? '' : 'parameter_text wajib diisi' }
+      return {
+        row:idx+2,
+        category:cleanText(getVal(r, ['category','CATEGORY','kategori','Kategori'])) || 'General',
+        parameter_text,
+        standard_parameter: cleanText(getVal(r, ['standard_parameter','STANDARD_PARAMETER','standar_parameter','Standar Parameter','standar','Standar'])),
+        hazard_code: cleanText(getVal(r, ['hazard_code','HAZARD_CODE','kode_bahaya','Kode Bahaya','kode bahaya'])),
+        behavior: cleanText(getVal(r, ['behavior','BEHAVIOR','perilaku','Perilaku'])),
+        sort_order:Number(getVal(r, ['sort_order','SORT_ORDER','urutan','Urutan'])) || idx+1,
+        status:cleanText(getVal(r, ['status','STATUS'])) || 'Aktif',
+        error: parameter_text ? '' : 'parameter_text wajib diisi'
+      }
     })
     setPreview(items)
   }
   async function submitImport(){
     setMsg(''); setError('')
     try {
-      const valid = preview.filter(r => !r.error).map(({row,error,...r}) => r)
+      const valid = preview.filter(r => !r.error).map(({row,error,...r}) => ({ ...r, standard_parameter: cleanText(r.standard_parameter) || null, hazard_code: cleanText(r.hazard_code) || null, behavior: cleanText(r.behavior) || null }))
       if (!valid.length) throw new Error('Tidak ada parameter valid.')
       const { error } = await supabase.from('food_parameters').insert(valid)
       if (error) throw error
       setMsg(`Import selesai: ${valid.length} parameter tersimpan.`); setPreview([]); load()
     } catch(e){ setError(e.message) }
   }
-  const tableRows = rows.map(r => ({ category:r.category, parameter_code:r.parameter_code, parameter_text:r.parameter_text, sort_order:r.sort_order, status:r.status }))
+  const tableRows = rows.map(r => ({ category:r.category, parameter_code:r.parameter_code, parameter_text:r.parameter_text, standard_parameter:r.standard_parameter || '-', hazard_code:r.hazard_code || '-', behavior:r.behavior || '-', sort_order:r.sort_order, status:r.status }))
   return <div className="stack">
     {msg && <div className="success">{msg}</div>}{error && <div className="error">{error}</div>}
-    <Panel title="Tambah Parameter Manual" desc="Jawaban inspeksi nanti hanya 1 atau 0. Jika 0, evidence foto wajib diupload.">
+    <Panel title="Tambah Parameter Manual" desc="Jawaban inspeksi tetap hanya 1 atau 0. Field standar parameter, kode bahaya, dan behavior dipakai sebagai referensi saat inspeksi.">
       <form className="form-grid" onSubmit={save}>
         <label>Kategori<input value={form.category} onChange={e=>setForm({...form, category:e.target.value})} /></label>
-        <label>Parameter<input value={form.parameter_text} onChange={e=>setForm({...form, parameter_text:e.target.value})} placeholder="Isi parameter inspeksi" /></label>
+        <label>Parameter Checklist<input value={form.parameter_text} onChange={e=>setForm({...form, parameter_text:e.target.value})} placeholder="Isi parameter inspeksi" /></label>
+        <label>Standar Parameter<input value={form.standard_parameter} onChange={e=>setForm({...form, standard_parameter:e.target.value})} placeholder="Contoh: Area bersih, kering, bebas kontaminasi" /></label>
+        <label>Kode Bahaya<input value={form.hazard_code} onChange={e=>setForm({...form, hazard_code:e.target.value})} placeholder="Contoh: HZ-FOOD-001" /></label>
+        <label>Behavior<input value={form.behavior} onChange={e=>setForm({...form, behavior:e.target.value})} placeholder="Contoh: Hygiene personil / housekeeping" /></label>
         <label>Urutan<input type="number" value={form.sort_order} onChange={e=>setForm({...form, sort_order:e.target.value})} /></label>
         <label>Status<select value={form.status} onChange={e=>setForm({...form, status:e.target.value})}><option>Aktif</option><option>Nonaktif</option></select></label>
         <button>Simpan Parameter</button>
       </form>
     </Panel>
-    <Panel title="Upload Parameter Excel" desc="Kolom: category, parameter_text, sort_order, status." action={<button className="secondary" onClick={downloadTemplate}><Download size={16}/> Download Template</button>}>
+    <Panel title="Upload Parameter Excel" desc="Kolom: category, parameter_text, standard_parameter, hazard_code, behavior, sort_order, status." action={<button className="secondary" onClick={downloadTemplate}><Download size={16}/> Download Template</button>}>
       <div className="import-row"><label className="upload-line"><Upload size={20}/><span>Upload Excel</span><input type="file" accept=".xlsx,.xls" hidden onChange={e=>e.target.files?.[0] && parseExcel(e.target.files[0])}/></label>{preview.length > 0 && <button onClick={submitImport}>Submit Import Valid</button>}</div>
-      {preview.length > 0 && <Table rows={preview.map(r=>({ row:r.row, category:r.category, parameter_text:r.parameter_text, sort_order:r.sort_order, status:r.status, valid:r.error || 'Valid' }))} />}
+      {preview.length > 0 && <Table rows={preview.map(r=>({ row:r.row, category:r.category, parameter_text:r.parameter_text, standard_parameter:r.standard_parameter || '-', hazard_code:r.hazard_code || '-', behavior:r.behavior || '-', sort_order:r.sort_order, status:r.status, valid:r.error || 'Valid' }))} />}
     </Panel>
     <Panel title="Row Data Parameter Food Index" action={<button onClick={()=>downloadXlsx('food-index-parameters.xlsx', tableRows)}><Download size={16}/> Export</button>}>
       <Table rows={tableRows} />
@@ -1178,6 +1316,11 @@ function FoodTasks({ context, profile }){
               <div>
                 <small>{p.category || 'General'}</small>
                 <strong>{p.parameter_text}</strong>
+                <div className="standard-meta">
+                  {p.hazard_code && <span>Kode Bahaya: {p.hazard_code}</span>}
+                  {p.behavior && <span>Behavior: {p.behavior}</span>}
+                </div>
+                {p.standard_parameter && <div className="standard-box"><b>Standar Parameter:</b> {p.standard_parameter}</div>}
               </div>
             </div>
             <div className="score-options" aria-label="Pilih nilai">
@@ -1190,7 +1333,12 @@ function FoodTasks({ context, profile }){
             </div>
             {isFinding ? <div className="finding-fields">
               <label className="field-block"><span>Catatan Temuan <em>*</em></span><textarea rows={3} placeholder="Jelaskan kondisi temuan secara singkat" value={a.note || ''} onChange={e=>setAnswer(p.id,{note:e.target.value})} /></label>
-              <label className="upload-card"><Upload size={20}/><b>{a.evidenceFile?.name || (a.evidenceUrl ? 'Evidence sudah ada' : 'Upload foto evidence')}</b><span>Format JPG/PNG/WEBP. Wajib untuk nilai 0.</span><input type="file" accept="image/*" hidden onChange={e=>setAnswer(p.id,{evidenceFile:e.target.files?.[0] || null})}/></label>
+              <div className="upload-card"><Upload size={20}/><b>{a.evidenceFile?.name || (a.evidenceUrl ? 'Evidence sudah ada' : 'Upload foto evidence')}</b><span>Pilih sumber foto evidence. Wajib untuk nilai 0.</span>
+                <div className="camera-options">
+                  <label className="camera-option"><Camera size={15}/> Kamera<input type="file" accept="image/*" capture="environment" hidden onChange={e=>setAnswer(p.id,{evidenceFile:e.target.files?.[0] || null})}/></label>
+                  <label className="camera-option"><ImageIcon size={15}/> Galeri<input type="file" accept="image/*" hidden onChange={e=>setAnswer(p.id,{evidenceFile:e.target.files?.[0] || null})}/></label>
+                </div>
+              </div>
               {a.evidenceUrl && <a className="evidence-link" href={a.evidenceUrl} target="_blank" rel="noreferrer">Lihat evidence tersimpan</a>}
             </div> : <div className="no-evidence-note">Pilih <b>0</b> jika ada temuan, lalu isi catatan dan upload foto evidence.</div>}
           </div>
@@ -1363,7 +1511,7 @@ function FoodOutstanding({ context, profile }){
       {loading ? <p>Memuat outstanding...</p> : <div className="table-wrap" style={{maxHeight:520, overflow:'auto'}}><table><thead><tr><th>Site</th><th>Vendor</th><th>Minggu</th><th>Parameter</th><th>Catatan</th><th>Evidence</th><th>Corrective</th><th>Preventive</th><th>Due Date</th><th>Status Task</th><th>Aksi</th></tr></thead><tbody>{rows.map(r => {
         const answer = r.food_findings?.food_inspection_answers
         const hasPlan = cleanText(r.food_findings?.corrective_action) && cleanText(r.food_findings?.preventive_action) && cleanText(r.food_findings?.due_date)
-        return <tr key={r.id}><td>{r.food_weekly_tasks?.sites?.site_code || '-'}</td><td>{r.food_weekly_tasks?.food_vendors?.vendor_name || '-'}</td><td>{r.food_weekly_tasks?.week_start_date || '-'}</td><td>{answer?.food_parameters?.parameter_text || '-'}</td><td>{answer?.finding_note || '-'}</td><td>{answer?.evidence_photo_url ? <a href={answer.evidence_photo_url} target="_blank" rel="noreferrer">Lihat foto</a> : '-'}</td><td>{r.food_findings?.corrective_action || '-'}</td><td>{r.food_findings?.preventive_action || '-'}</td><td>{r.food_findings?.due_date || '-'}</td><td>{renderCell(r.food_weekly_tasks?.status)}</td><td>{!hasPlan ? <button onClick={()=>openActionPlan(r)}>Isi Tindakan</button> : r.status === 'Closed' ? <StatusPill value="Closed" /> : r.status === 'Waiting Close Approval' ? <StatusPill value="Waiting Close Approval" /> : <button onClick={()=>openCloseOutstanding(r)}>Close Outstanding</button>}</td></tr>
+        return <tr key={r.id}><td>{r.food_weekly_tasks?.sites?.site_code || '-'}</td><td>{r.food_weekly_tasks?.food_vendors?.vendor_name || '-'}</td><td>{r.food_weekly_tasks?.week_start_date || '-'}</td><td>{answer?.food_parameters?.parameter_text || '-'}</td><td>{answer?.finding_note || '-'}</td><td>{answer?.evidence_photo_url ? <a href={answer.evidence_photo_url} target="_blank" rel="noreferrer">Lihat foto</a> : '-'}</td><td>{r.food_findings?.corrective_action || '-'}</td><td>{r.food_findings?.preventive_action || '-'}</td><td>{r.food_findings?.due_date || '-'}</td><td className="status-task-cell">{renderCell(r.food_weekly_tasks?.status)}</td><td>{!hasPlan ? <button onClick={()=>openActionPlan(r)}>Isi Tindakan</button> : r.status === 'Closed' ? <StatusPill value="Closed" /> : r.status === 'Waiting Close Approval' ? <StatusPill value="Waiting Close Approval" /> : <button onClick={()=>openCloseOutstanding(r)}>Close Outstanding</button>}</td></tr>
       })}</tbody></table>{!rows.length && <p className="muted table-empty">Belum ada outstanding / temuan.</p>}</div>}
     </Panel>
     <Panel title="Export Outstanding" action={<button onClick={()=>downloadXlsx('food-index-outstanding.xlsx', tableRows)}><Download size={16}/> Export</button>}>
@@ -1608,7 +1756,7 @@ function FoodApproval({ context, profile }){
         {sortedAnswers.map((a, idx) => {
           const finding = (active.food_findings || []).find(f => f.answer_id === a.id)
           const isFinding = Number(a.score) === 0
-          return <div key={a.id} className={`inspection-item ${isFinding ? 'finding' : 'passed'}`}>
+          return <div key={a.id} className={`inspection-item ${isFinding ? 'finding approval-review-finding' : 'passed'}`}>
             <div className="inspection-param">
               <span className="param-index">{idx + 1}</span>
               <div><small>{a.food_parameters?.category || 'General'}</small><strong>{a.food_parameters?.parameter_text || '-'}</strong></div>
