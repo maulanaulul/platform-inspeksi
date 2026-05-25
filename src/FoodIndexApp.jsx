@@ -686,11 +686,22 @@ function FoodIndexScopedStyles(){
     .food-index-app .status-task-cell .status-pill { white-space:normal; text-align:center; line-height:1.2; }
     .food-index-app .inspection-item.finding.approval-review-finding { background:linear-gradient(180deg,#fee2e2,#fff5f5) !important; border-color:#ef4444 !important; box-shadow:0 12px 34px rgba(239,68,68,.16) !important; }
     .food-index-app .approval-review-finding .param-index { background:#ef4444 !important; color:white !important; }
-    .food-index-app .dashboard-admin-filters { display:grid; grid-template-columns:repeat(4,minmax(150px,1fr)) auto; gap:12px; align-items:end; margin-top:18px; }
-    .food-index-app .dashboard-admin-filters label { display:grid; gap:7px; font-weight:700; color:#334155; font-size:13px; }
-    .food-index-app .dashboard-admin-filters select { height:48px; border-radius:16px; border:1px solid #bfdbfe; background:white; padding:0 12px; font-weight:700; }
+    /* v48 dashboard layout polish */
+    .food-index-app .dashboard-filter-card { display:grid !important; grid-template-columns:1fr !important; gap:18px !important; align-items:stretch !important; padding:22px !important; }
+    .food-index-app .dashboard-filter-card > div:first-child { max-width: none !important; }
+    .food-index-app .dashboard-filter-card small { font-size:13px !important; margin-bottom:6px !important; }
+    .food-index-app .dashboard-filter-card h3 { font-size:24px !important; line-height:1.15 !important; }
+    .food-index-app .dashboard-filter-card p { font-size:15px !important; line-height:1.45 !important; max-width: 760px !important; }
+    .food-index-app .dashboard-admin-filters { display:grid; grid-template-columns:repeat(4,minmax(155px,1fr)) minmax(130px,.6fr); gap:12px; align-items:end; margin-top:0; width:100%; }
+    .food-index-app .dashboard-admin-filters label { display:grid; gap:7px; font-weight:700; color:#334155; font-size:13px; min-width:0; }
+    .food-index-app .dashboard-admin-filters select { height:46px; width:100%; border-radius:15px; border:1px solid #bfdbfe; background:white; padding:0 12px; font-weight:700; min-width:0; }
+    .food-index-app .dashboard-admin-filters button { min-height:46px !important; height:46px !important; border-radius:15px !important; padding:0 16px !important; white-space:nowrap; }
+    .food-index-app .dashboard-tags { margin-top:0 !important; }
     .food-index-app .dashboard-analysis-grid { display:grid; grid-template-columns:1fr; gap:18px; margin-top:20px; }
     .food-index-app .analysis-table table { min-width:1200px; }
+    .food-index-app .resume-table table { min-width:980px; }
+    .food-index-app .dashboard-card.compact-card { padding:22px !important; }
+    .food-index-app .dashboard-card.compact-card h3 { font-size:26px !important; }
     .food-index-app .score-badge { display:inline-flex; padding:7px 11px; border-radius:999px; font-weight:800; font-size:12px; }
     .food-index-app .score-badge.ok { background:#dcfce7; color:#166534; }
     .food-index-app .score-badge.bad { background:#fee2e2; color:#991b1b; }
@@ -737,15 +748,18 @@ function FoodDashboard({ context }){
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [siteFilter, setSiteFilter] = useState('')
-  const [weekFilter, setWeekFilter] = useState(startOfWeekMonday(now))
-  const [monthFilter, setMonthFilter] = useState(String(now.getMonth() + 1).padStart(2, '0'))
+  const [weekFilter, setWeekFilter] = useState('ALL')
+  const [monthFilter, setMonthFilter] = useState('ALL')
   const [yearFilter, setYearFilter] = useState(String(now.getFullYear()))
   const [sites, setSites] = useState([])
   const [vendors, setVendors] = useState([])
   const [tasks, setTasks] = useState([])
   const [outs, setOuts] = useState([])
   const [parameters, setParameters] = useState([])
-  const weekEnd = endOfWeekSunday(weekFilter)
+  const weekEnd = weekFilter === 'ALL' ? '' : endOfWeekSunday(weekFilter)
+  const weekLabel = weekFilter === 'ALL' ? 'All Week' : `${weekFilter} s/d ${weekEnd}`
+  const monthLabel = monthFilter === 'ALL' ? 'All Month' : monthFilter
+  const yearLabel = yearFilter === 'ALL' ? 'All Year' : yearFilter
   const thursdayAlert = new Date().getDay() >= 4 || new Date().getDay() === 0
 
   useEffect(() => { load() }, [context?.id, siteFilter, weekFilter, monthFilter, yearFilter])
@@ -754,8 +768,15 @@ function FoodDashboard({ context }){
     setLoading(true); setError('')
     try {
       if (adminCanSeeAll(context)) setSites(await fetchSites())
-      const monthStart = `${yearFilter}-${monthFilter}-01`
-      const monthEndDate = new Date(Number(yearFilter), Number(monthFilter), 0).toISOString().slice(0,10)
+      let monthStart = null
+      let monthEndDate = null
+      if (yearFilter !== 'ALL' && monthFilter !== 'ALL') {
+        monthStart = `${yearFilter}-${monthFilter}-01`
+        monthEndDate = new Date(Number(yearFilter), Number(monthFilter), 0).toISOString().slice(0,10)
+      } else if (yearFilter !== 'ALL') {
+        monthStart = `${yearFilter}-01-01`
+        monthEndDate = `${yearFilter}-12-31`
+      }
       let tq = supabase
         .from('food_weekly_tasks')
         .select(`
@@ -765,9 +786,8 @@ function FoodDashboard({ context }){
           food_inspection_answers(id, score, finding_note, evidence_photo_url, food_parameters(category, parameter_text, sort_order)),
           food_findings(id, due_date, corrective_action, preventive_action, status)
         `)
-        .gte('week_start_date', monthStart)
-        .lte('week_start_date', monthEndDate)
         .order('week_start_date', { ascending:false })
+      if (monthStart && monthEndDate) tq = tq.gte('week_start_date', monthStart).lte('week_start_date', monthEndDate)
       let oq = supabase
         .from('food_outstandings')
         .select('*, food_findings(corrective_action, preventive_action, due_date, food_inspection_answers(finding_note, evidence_photo_url, food_parameters(parameter_text)), food_weekly_tasks(week_start_date, submitted_at, approved_at, sites(site_code,site_name), food_vendors(vendor_name)))')
@@ -792,7 +812,7 @@ function FoodDashboard({ context }){
     setLoading(false)
   }
 
-  const weekTasks = tasks.filter(t => t.week_start_date === weekFilter)
+  const weekTasks = weekFilter === 'ALL' ? tasks : tasks.filter(t => t.week_start_date === weekFilter)
   const total = weekTasks.length
   const approved = weekTasks.filter(t => t.status === 'Approved').length
   const expired = weekTasks.filter(t => t.status === 'Expired').length
@@ -838,8 +858,9 @@ function FoodDashboard({ context }){
   const inspectedVendorIds = new Set(tasks.filter(t => ['Waiting Approval','Approved','Need Action Plan'].includes(t.status) || t.submitted_at).map(t => t.vendor_id))
   const executionScore = vendorCount ? Math.round((inspectedVendorIds.size / vendorCount) * 100) : 0
   const executionRows = [{
-    bulan: `${monthFilter}-${yearFilter}`,
-    site: siteFilter ? sites.find(s => s.id === siteFilter)?.site_code || 'Site terpilih' : adminCanSeeAll(context) ? 'Semua Site' : contextSiteName(context),
+    periode: `${monthLabel}-${yearLabel}`,
+    bulan: monthLabel,
+    site: siteFilter ? sites.find(s => s.id === siteFilter)?.site_code || 'Site terpilih' : adminCanSeeAll(context) ? 'All Site' : contextSiteName(context),
     total_vendor_aktif: vendorCount,
     vendor_sudah_inspeksi: inspectedVendorIds.size,
     skor_pelaksanaan: `${executionScore}%`,
@@ -863,30 +884,63 @@ function FoodDashboard({ context }){
     }
   })
 
-  const years = Array.from({ length: 6 }, (_, i) => String(now.getFullYear() - i))
-  const monthOptions = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0'))
-  const weekOptions = []
-  for (let d = new Date(Number(yearFilter), Number(monthFilter) - 1, 1); d.getMonth() === Number(monthFilter) - 1; d.setDate(d.getDate() + 7)) {
-    weekOptions.push(startOfWeekMonday(new Date(d)))
+  function pct(n, d){ return d ? Math.round((n / d) * 100) : 0 }
+  const siteSource = adminCanSeeAll(context) ? sites : [{ id: context?.site_id, site_code: contextSiteName(context), site_name: contextSiteName(context) }]
+  const resumeRows = siteSource
+    .filter(s => !siteFilter || s.id === siteFilter)
+    .map((s, idx) => {
+      const siteTasks = tasks.filter(t => t.site_id === s.id)
+      const siteAnswers = siteTasks.flatMap(t => t.food_inspection_answers || [])
+      const siteOkAnswers = siteAnswers.filter(a => Number(a.score) === 1).length
+      const scoreFoodIndex = pct(siteOkAnswers, siteAnswers.length)
+      const siteVendorIds = new Set(vendors.filter(v => v.site_id === s.id).map(v => v.id))
+      const inspectedSiteVendorIds = new Set(siteTasks.filter(t => ['Waiting Approval','Approved','Need Action Plan'].includes(t.status) || t.submitted_at).map(t => t.vendor_id).filter(Boolean))
+      const skorPelaksanaan = pct(inspectedSiteVendorIds.size, siteVendorIds.size)
+      const siteLeadtime = leadtimeRows.filter(r => r.site === s.site_code)
+      const leadtimeScore = siteLeadtime.length ? pct(siteLeadtime.filter(r => r.remark === 'Tercapai').length, siteLeadtime.length) : 0
+      const available = [scoreFoodIndex, skorPelaksanaan, ...(siteLeadtime.length ? [leadtimeScore] : [])]
+      const achievement = available.length ? Math.round(available.reduce((a,b)=>a+b,0) / available.length) : 0
+      return {
+        no: idx + 1,
+        site: s.site_code || '-',
+        site_name: s.site_name || '-',
+        score_food_index: `${scoreFoodIndex}%`,
+        skor_pelaksanaan: `${skorPelaksanaan}%`,
+        leadtime_perbaikan: siteLeadtime.length ? `${leadtimeScore}%` : '-',
+        achievement_site: `${achievement}%`,
+        remark: achievement >= 95 ? 'Tercapai' : 'Tidak tercapai'
+      }
+    })
+
+  const years = ['ALL', ...Array.from({ length: 6 }, (_, i) => String(now.getFullYear() - i))]
+  const monthOptions = ['ALL', ...Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0'))]
+  const weekOptions = ['ALL']
+  if (yearFilter !== 'ALL' && monthFilter !== 'ALL') {
+    for (let d = new Date(Number(yearFilter), Number(monthFilter) - 1, 1); d.getMonth() === Number(monthFilter) - 1; d.setDate(d.getDate() + 7)) {
+      const w = startOfWeekMonday(new Date(d))
+      if (!weekOptions.includes(w)) weekOptions.push(w)
+    }
+  } else {
+    tasks.forEach(t => { if (t.week_start_date && !weekOptions.includes(t.week_start_date)) weekOptions.push(t.week_start_date) })
   }
-  if (!weekOptions.includes(weekFilter)) weekOptions.unshift(weekFilter)
+  if (weekFilter !== 'ALL' && !weekOptions.includes(weekFilter)) weekOptions.push(weekFilter)
 
   return <div className="food-dashboard-v43">
     {error && <div className="error">{error}</div>}
     <div className="dashboard-filter-card">
       <div>
         <small>Scope dashboard</small>
-        <h3>{siteFilter ? sites.find(s => s.id === siteFilter)?.site_code || 'Site terpilih' : 'Semua site'}</h3>
+        <h3>{siteFilter ? sites.find(s => s.id === siteFilter)?.site_code || 'Site terpilih' : 'All Site'}</h3>
         <p>Dashboard mengikuti filter week, bulan, tahun, dan site. Achievement hanya bertambah setelah inspeksi full approved.</p>
       </div>
       <div className="dashboard-admin-filters">
-        <label>Week<select value={weekFilter} onChange={e=>setWeekFilter(e.target.value)}>{weekOptions.map(w=><option key={w} value={w}>{w} s/d {endOfWeekSunday(w)}</option>)}</select></label>
-        <label>Bulan<select value={monthFilter} onChange={e=>setMonthFilter(e.target.value)}>{monthOptions.map(m=><option key={m} value={m}>{m}</option>)}</select></label>
-        <label>Tahun<select value={yearFilter} onChange={e=>setYearFilter(e.target.value)}>{years.map(y=><option key={y} value={y}>{y}</option>)}</select></label>
-        {adminCanSeeAll(context) && <label>Site<select value={siteFilter} onChange={e=>setSiteFilter(e.target.value)}><option value="">Semua Site</option>{sites.map(s=><option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}</select></label>}
+        <label>Week<select value={weekFilter} onChange={e=>setWeekFilter(e.target.value)}>{weekOptions.map(w=><option key={w} value={w}>{w === 'ALL' ? 'All Week' : `${w} s/d ${endOfWeekSunday(w)}`}</option>)}</select></label>
+        <label>Bulan<select value={monthFilter} onChange={e=>setMonthFilter(e.target.value)}>{monthOptions.map(m=><option key={m} value={m}>{m === 'ALL' ? 'All Month' : m}</option>)}</select></label>
+        <label>Tahun<select value={yearFilter} onChange={e=>setYearFilter(e.target.value)}>{years.map(y=><option key={y} value={y}>{y === 'ALL' ? 'All Year' : y}</option>)}</select></label>
+        {adminCanSeeAll(context) && <label>Site<select value={siteFilter} onChange={e=>setSiteFilter(e.target.value)}><option value="">All Site</option>{sites.map(s=><option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}</select></label>}
         <button onClick={load}>⟳ Refresh</button>
       </div>
-      <div className="dashboard-tags"><span>Site: {siteFilter ? sites.find(s => s.id === siteFilter)?.site_code || 'Terpilih' : 'Semua site'}</span><span>Minggu: {weekFilter} s/d {weekEnd}</span>{thursdayAlert && <span>Alert Kamis aktif</span>}</div>
+      <div className="dashboard-tags"><span>Site: {siteFilter ? sites.find(s => s.id === siteFilter)?.site_code || 'Terpilih' : 'All Site'}</span><span>Week: {weekLabel}</span><span>Bulan: {monthLabel}</span><span>Tahun: {yearLabel}</span>{thursdayAlert && <span>Alert Kamis aktif</span>}</div>
     </div>
 
     <div className="dashboard-kpi-grid">
@@ -895,6 +949,11 @@ function FoodDashboard({ context }){
       <div className="dash-kpi"><small>Outstanding Open</small><strong>{outs.filter(o => o.status !== 'Closed').length}</strong><span className="orange">Butuh follow up</span></div>
       <div className="dash-kpi"><small>Expired</small><strong>{expired}</strong><span className="red">Impact achievement</span></div>
     </div>
+
+    {adminCanSeeAll(context) && <section className="dashboard-card analysis-table resume-table compact-card">
+      <div className="dashboard-card-head"><div><h3>Resume Achievement per Site</h3><p>Ringkasan 3 dashboard utama per site: Score Food Index, Skor Pelaksanaan Inspeksi, dan Leadtime Perbaikan.</p></div><button onClick={()=>downloadXlsx('resume-achievement-food-index-per-site.xlsx', resumeRows)}>Export</button></div>
+      <Table rows={resumeRows} columns={['no','site','site_name','score_food_index','skor_pelaksanaan','leadtime_perbaikan','achievement_site','remark']} empty="Belum ada data resume." />
+    </section>}
 
     {adminCanSeeAll(context) && <div className="dashboard-analysis-grid">
       <section className="dashboard-card analysis-table">
