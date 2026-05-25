@@ -715,6 +715,10 @@ function FoodIndexScopedStyles(){
     }
 
 
+
+    .food-index-app .panel-actions { display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
+    .food-index-app .action-cell { display:flex; gap:8px; align-items:center; flex-wrap:wrap; white-space:nowrap; }
+    .food-index-app button.small { min-height:34px; padding:7px 11px; font-size:12px; border-radius:10px; }
   `}</style>
 }
 
@@ -1035,15 +1039,35 @@ function FoodVendors({ context }){
     const buf = await file.arrayBuffer()
     const wb = XLSX.read(buf)
     const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]).map(normalizeRow)
-    const siteMap = new Map((await fetchSites()).map(s => [String(s.site_code).toUpperCase(), s]))
+    const siteList = await fetchSites()
+    const siteMap = new Map(siteList.map(s => [String(s.site_code).toUpperCase(), s]))
+    const { data: existingData, error: existingError } = await supabase
+      .from('food_vendors')
+      .select('id, site_id, vendor_name, status, sites(site_code)')
+      .eq('status', 'Aktif')
+    if (existingError) throw existingError
+
+    const normalizeKey = (siteId, name) => `${siteId || ''}::${cleanText(name).toUpperCase().replace(/\s+/g, ' ')}`
+    const existingActive = new Set((existingData || []).map(v => normalizeKey(v.site_id, v.vendor_name)))
+    const seenInFile = new Map()
+
     const mapped = rows.map((r, idx) => {
       const siteCode = cleanText(getVal(r, ['site_code','SITE_CODE','Site Code'])).toUpperCase()
       const site = siteMap.get(siteCode)
       const vendor_name = cleanText(getVal(r, ['vendor_name','VENDOR_NAME','nama_vendor','Nama Vendor']))
       const status = cleanText(getVal(r, ['status','STATUS'])) || 'Aktif'
-      const err = !site ? 'site_code tidak ditemukan' : !vendor_name ? 'vendor_name wajib diisi' : ''
+      const isActive = String(status).toLowerCase() === 'aktif'
+      const key = normalizeKey(site?.id, vendor_name)
+      let err = !site ? 'site_code tidak ditemukan' : !vendor_name ? 'vendor_name wajib diisi' : ''
+      if (!err && isActive) {
+        if (seenInFile.has(key)) err = `Duplicate di Excel dengan baris ${seenInFile.get(key)} untuk site ${siteCode}`
+        else if (existingActive.has(key)) err = `Vendor aktif sudah ada di database untuk site ${siteCode}`
+      }
+      if (!seenInFile.has(key)) seenInFile.set(key, idx+2)
       return { row: idx+2, site_code: siteCode, site_id: site?.id, vendor_name, status, error: err }
     })
+    const errCount = mapped.filter(r => r.error).length
+    if (errCount) setError(`Preview menemukan ${errCount} baris bermasalah. Perbaiki baris yang tidak valid sebelum submit.`)
     setPreview(mapped)
   }
   async function submitImport(){
@@ -1080,16 +1104,24 @@ function FoodVendors({ context }){
 
 function FoodParameters({ context }){
   const [rows, setRows] = useState([])
-  const [form, setForm] = useState({ category:'General', parameter_text:'', standard_parameter:'', hazard_code:'', behavior:'', sort_order:1, status:'Aktif' })
+  const emptyForm = { id:null, parameter_code:'', category:'General', parameter_text:'', standard_parameter:'', hazard_code:'', behavior:'', sort_order:1, status:'Aktif' }
+  const [form, setForm] = useState(emptyForm)
   const [preview, setPreview] = useState([])
   const [msg, setMsg] = useState('')
   const [error, setError] = useState('')
+  const editing = Boolean(form.id)
+
   useEffect(() => { load() }, [])
   async function load(){
     const { data, error } = await supabase.from('food_parameters').select('*').order('sort_order')
     if (error) setError(error.message)
     setRows(data || [])
   }
+
+  function resetForm(){
+    setForm({ ...emptyForm, sort_order: (rows.length + 1) || 1 })
+  }
+
   async function save(e){
     e.preventDefault(); setMsg(''); setError('')
     try {
@@ -1103,20 +1135,84 @@ function FoodParameters({ context }){
         sort_order: Number(form.sort_order) || 1,
         status: form.status || 'Aktif'
       }
-      const { error } = await supabase.from('food_parameters').insert(payload)
-      if (error) throw error
-      setForm({ category:'General', parameter_text:'', standard_parameter:'', hazard_code:'', behavior:'', sort_order:(rows.length+2), status:'Aktif' })
-      setMsg('Parameter berhasil disimpan.'); load()
+      if (editing) {
+        const { error } = await supabase.from('food_parameters').update(payload).eq('id', form.id)
+        if (error) throw error
+        setMsg('Parameter berhasil diupdate.')
+      } else {
+        const { error } = await supabase.from('food_parameters').insert(payload)
+        if (error) throw error
+        setMsg('Parameter berhasil disimpan.')
+      }
+      resetForm(); load()
     } catch(e){ setError(e.message) }
   }
-  function downloadTemplate(){ downloadXlsx('template-master-parameter-food-index.xlsx', [{ category:'Kebersihan', parameter_text:'Area penyajian bersih dan rapi', standard_parameter:'Area bebas sampah, lantai kering, tidak licin', hazard_code:'FIP-HAZ-01', behavior:'Housekeeping dan hygiene vendor', sort_order:1, status:'Aktif' }]) }
+
+  function editRow(r){
+    setForm({
+      id:r.id,
+      parameter_code:r.parameter_code || '',
+      category:r.category || 'General',
+      parameter_text:r.parameter_text || '',
+      standard_parameter:r.standard_parameter || '',
+      hazard_code:r.hazard_code || '',
+      behavior:r.behavior || '',
+      sort_order:r.sort_order || 1,
+      status:r.status || 'Aktif'
+    })
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  async function deleteRow(r){
+    setMsg(''); setError('')
+    try {
+      if (!confirm(`Nonaktifkan parameter "${r.parameter_text}"?`)) return
+      const { error } = await supabase.from('food_parameters').update({ status:'Nonaktif' }).eq('id', r.id)
+      if (error) throw error
+      setMsg('Parameter berhasil dinonaktifkan. Data histori inspeksi tetap aman.'); load()
+    } catch(e){ setError(e.message) }
+  }
+
+  function downloadTemplate(){
+    downloadXlsx('template-master-parameter-food-index.xlsx', [{
+      id:'', parameter_code:'', category:'Kebersihan', parameter_text:'Area penyajian bersih dan rapi',
+      standard_parameter:'Area bebas sampah, lantai kering, tidak licin', hazard_code:'FIP-HAZ-01',
+      behavior:'Housekeeping dan hygiene vendor', sort_order:1, status:'Aktif'
+    }])
+  }
+
+  function downloadExisting(){
+    const existing = rows.map(r => ({
+      id:r.id,
+      parameter_code:r.parameter_code || '',
+      category:r.category || '',
+      parameter_text:r.parameter_text || '',
+      standard_parameter:r.standard_parameter || '',
+      hazard_code:r.hazard_code || '',
+      behavior:r.behavior || '',
+      sort_order:r.sort_order || 1,
+      status:r.status || 'Aktif'
+    }))
+    downloadXlsx('food-index-parameters-existing-update.xlsx', existing)
+  }
+
   async function parseExcel(file){
+    setMsg(''); setError('')
     const buf = await file.arrayBuffer()
     const wb = XLSX.read(buf)
+    const seen = new Map()
     const items = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]).map(normalizeRow).map((r, idx) => {
+      const id = cleanText(getVal(r, ['id','ID']))
+      const parameter_code = cleanText(getVal(r, ['parameter_code','PARAMETER_CODE','kode_parameter','Kode Parameter']))
       const parameter_text = cleanText(getVal(r, ['parameter_text','PARAMETER_TEXT','parameter','Parameter','soal','Soal']))
+      const key = (id || parameter_code || parameter_text).toUpperCase()
+      let error = parameter_text ? '' : 'parameter_text wajib diisi'
+      if (!error && seen.has(key)) error = `Duplicate di Excel dengan baris ${seen.get(key)}`
+      if (!seen.has(key)) seen.set(key, idx+2)
       return {
         row:idx+2,
+        id,
+        parameter_code,
         category:cleanText(getVal(r, ['category','CATEGORY','kategori','Kategori'])) || 'General',
         parameter_text,
         standard_parameter: cleanText(getVal(r, ['standard_parameter','STANDARD_PARAMETER','standar_parameter','Standar Parameter','standar','Standar'])),
@@ -1124,26 +1220,65 @@ function FoodParameters({ context }){
         behavior: cleanText(getVal(r, ['behavior','BEHAVIOR','perilaku','Perilaku'])),
         sort_order:Number(getVal(r, ['sort_order','SORT_ORDER','urutan','Urutan'])) || idx+1,
         status:cleanText(getVal(r, ['status','STATUS'])) || 'Aktif',
-        error: parameter_text ? '' : 'parameter_text wajib diisi'
+        error
       }
     })
+    const errCount = items.filter(r => r.error).length
+    if (errCount) setError(`Preview menemukan ${errCount} baris bermasalah. Perbaiki dulu sebelum submit.`)
     setPreview(items)
   }
+
   async function submitImport(){
     setMsg(''); setError('')
     try {
-      const valid = preview.filter(r => !r.error).map(({row,error,...r}) => ({ ...r, standard_parameter: cleanText(r.standard_parameter) || null, hazard_code: cleanText(r.hazard_code) || null, behavior: cleanText(r.behavior) || null }))
+      const valid = preview.filter(r => !r.error).map(({row,error,...r}) => ({
+        ...r,
+        standard_parameter: cleanText(r.standard_parameter) || null,
+        hazard_code: cleanText(r.hazard_code) || null,
+        behavior: cleanText(r.behavior) || null
+      }))
       if (!valid.length) throw new Error('Tidak ada parameter valid.')
-      const { error } = await supabase.from('food_parameters').insert(valid)
-      if (error) throw error
-      setMsg(`Import selesai: ${valid.length} parameter tersimpan.`); setPreview([]); load()
+      const idMap = new Map(rows.map(r => [r.id, r]))
+      const codeMap = new Map(rows.filter(r => r.parameter_code).map(r => [String(r.parameter_code).toUpperCase(), r]))
+      let updated = 0
+      let inserted = 0
+      for (const r of valid) {
+        const payload = {
+          category:r.category || 'General',
+          parameter_text:r.parameter_text,
+          standard_parameter:r.standard_parameter,
+          hazard_code:r.hazard_code,
+          behavior:r.behavior,
+          sort_order:Number(r.sort_order) || 1,
+          status:r.status || 'Aktif'
+        }
+        const targetById = r.id && idMap.get(r.id)
+        const targetByCode = !targetById && r.parameter_code && codeMap.get(String(r.parameter_code).toUpperCase())
+        if (targetById) {
+          const { error } = await supabase.from('food_parameters').update(payload).eq('id', r.id)
+          if (error) throw error
+          updated += 1
+        } else if (targetByCode) {
+          const { error } = await supabase.from('food_parameters').update(payload).eq('id', targetByCode.id)
+          if (error) throw error
+          updated += 1
+        } else {
+          const { error } = await supabase.from('food_parameters').insert(payload)
+          if (error) throw error
+          inserted += 1
+        }
+      }
+      setMsg(`Import selesai: ${updated} parameter diupdate, ${inserted} parameter baru tersimpan.`); setPreview([]); load()
     } catch(e){ setError(e.message) }
   }
-  const tableRows = rows.map(r => ({ category:r.category, parameter_code:r.parameter_code, parameter_text:r.parameter_text, standard_parameter:r.standard_parameter || '-', hazard_code:r.hazard_code || '-', behavior:r.behavior || '-', sort_order:r.sort_order, status:r.status }))
+
+  const tableRows = rows.map(r => ({ id:r.id, category:r.category, parameter_code:r.parameter_code, parameter_text:r.parameter_text, standard_parameter:r.standard_parameter || '-', hazard_code:r.hazard_code || '-', behavior:r.behavior || '-', sort_order:r.sort_order, status:r.status }))
+
   return <div className="stack">
     {msg && <div className="success">{msg}</div>}{error && <div className="error">{error}</div>}
-    <Panel title="Tambah Parameter Manual" desc="Jawaban inspeksi tetap hanya 1 atau 0. Field standar parameter, kode bahaya, dan behavior dipakai sebagai referensi saat inspeksi.">
+    <Panel title={editing ? 'Edit Parameter' : 'Tambah Parameter Manual'} desc="Jawaban inspeksi tetap hanya 1 atau 0. Field standar parameter, kode bahaya, dan behavior dipakai sebagai referensi saat inspeksi.">
       <form className="form-grid" onSubmit={save}>
+        {editing && <label>Kode Parameter<input value={form.parameter_code} disabled /></label>}
         <label>Kategori<input value={form.category} onChange={e=>setForm({...form, category:e.target.value})} /></label>
         <label>Parameter Checklist<input value={form.parameter_text} onChange={e=>setForm({...form, parameter_text:e.target.value})} placeholder="Isi parameter inspeksi" /></label>
         <label>Standar Parameter<input value={form.standard_parameter} onChange={e=>setForm({...form, standard_parameter:e.target.value})} placeholder="Contoh: Area bersih, kering, bebas kontaminasi" /></label>
@@ -1151,19 +1286,26 @@ function FoodParameters({ context }){
         <label>Behavior<input value={form.behavior} onChange={e=>setForm({...form, behavior:e.target.value})} placeholder="Contoh: Hygiene personil / housekeeping" /></label>
         <label>Urutan<input type="number" value={form.sort_order} onChange={e=>setForm({...form, sort_order:e.target.value})} /></label>
         <label>Status<select value={form.status} onChange={e=>setForm({...form, status:e.target.value})}><option>Aktif</option><option>Nonaktif</option></select></label>
-        <button>Simpan Parameter</button>
+        <button>{editing ? 'Update Parameter' : 'Simpan Parameter'}</button>
+        {editing && <button type="button" className="secondary" onClick={resetForm}>Batal Edit</button>}
       </form>
     </Panel>
-    <Panel title="Upload Parameter Excel" desc="Kolom: category, parameter_text, standard_parameter, hazard_code, behavior, sort_order, status." action={<button className="secondary" onClick={downloadTemplate}><Download size={16}/> Download Template</button>}>
-      <div className="import-row"><label className="upload-line"><Upload size={20}/><span>Upload Excel</span><input type="file" accept=".xlsx,.xls" hidden onChange={e=>e.target.files?.[0] && parseExcel(e.target.files[0])}/></label>{preview.length > 0 && <button onClick={submitImport}>Submit Import Valid</button>}</div>
-      {preview.length > 0 && <Table rows={preview.map(r=>({ row:r.row, category:r.category, parameter_text:r.parameter_text, standard_parameter:r.standard_parameter || '-', hazard_code:r.hazard_code || '-', behavior:r.behavior || '-', sort_order:r.sort_order, status:r.status, valid:r.error || 'Valid' }))} />}
+    <Panel title="Upload / Update Parameter Excel" desc="Download data existing, lengkapi kolom kosong, lalu upload ulang untuk update. Kolom: id, parameter_code, category, parameter_text, standard_parameter, hazard_code, behavior, sort_order, status." action={<div className="panel-actions"><button className="secondary" onClick={downloadTemplate}><Download size={16}/> Download Template</button><button className="secondary" onClick={downloadExisting}><Download size={16}/> Download Data Existing</button></div>}>
+      <div className="import-row"><label className="upload-line"><Upload size={20}/><span>Upload Excel Update</span><input type="file" accept=".xlsx,.xls" hidden onChange={e=>e.target.files?.[0] && parseExcel(e.target.files[0])}/></label>{preview.length > 0 && <button onClick={submitImport}>Submit Import / Update Valid</button>}</div>
+      {preview.length > 0 && <Table rows={preview.map(r=>({ row:r.row, id:r.id || '-', parameter_code:r.parameter_code || '-', category:r.category, parameter_text:r.parameter_text, standard_parameter:r.standard_parameter || '-', hazard_code:r.hazard_code || '-', behavior:r.behavior || '-', sort_order:r.sort_order, status:r.status, valid:r.error || 'Valid' }))} />}
     </Panel>
     <Panel title="Row Data Parameter Food Index" action={<button onClick={()=>downloadXlsx('food-index-parameters.xlsx', tableRows)}><Download size={16}/> Export</button>}>
-      <Table rows={tableRows} />
+      <div className="table-toolbar"><div className="searchbox"><Search size={18}/><input placeholder="Search row data..." onChange={e=>{ const q=e.target.value.toLowerCase(); document.querySelectorAll('.parameter-row').forEach(tr=>{ tr.style.display = !q || tr.innerText.toLowerCase().includes(q) ? '' : 'none' }) }} /></div></div>
+      <div className="table-wrap" style={{maxHeight: 460, overflow:'auto'}}>
+        <table>
+          <thead><tr><th>Parameter Code</th><th>Category</th><th>Parameter Text</th><th>Standard Parameter</th><th>Hazard Code</th><th>Behavior</th><th>Sort Order</th><th>Status</th><th>Aksi</th></tr></thead>
+          <tbody>{rows.map(r => <tr className="parameter-row" key={r.id}><td>{r.parameter_code || '-'}</td><td>{r.category}</td><td>{r.parameter_text}</td><td>{r.standard_parameter || '-'}</td><td>{r.hazard_code || '-'}</td><td>{r.behavior || '-'}</td><td>{r.sort_order}</td><td><StatusPill value={r.status} /></td><td className="action-cell"><button className="secondary small" onClick={()=>editRow(r)}>Edit</button><button className="danger small" onClick={()=>deleteRow(r)}>Delete</button></td></tr>)}</tbody>
+        </table>
+        {!rows.length && <p className="muted table-empty">Belum ada parameter.</p>}
+      </div>
     </Panel>
   </div>
 }
-
 async function uploadFoodImage(file, folder='evidence'){
   if (!file) return ''
   const ext = (file.name?.split('.').pop() || 'jpg').toLowerCase()
