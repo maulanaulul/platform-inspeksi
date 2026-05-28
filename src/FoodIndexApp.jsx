@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from './lib/supabase'
 import {
   AlertTriangle, BarChart3, Building2, CalendarCheck, CheckCircle2, ClipboardCheck,
@@ -137,6 +137,96 @@ function Panel({ title, desc, action, children }){
 function Kpi({ title, value, icon }){ return <div className="kpi"><div><small>{title}</small><strong>{value}</strong></div><div className="kpi-icon">{icon}</div></div> }
 function StatusPill({ value }){ return <span className={`status-pill ${statusClass(value)}`}>{value || '-'}</span> }
 
+function SignaturePad({ value, onChange }){
+  const canvasRef = useRef(null)
+  const drawingRef = useRef(false)
+  const lastRef = useRef({ x:0, y:0 })
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    ctx.lineCap = 'round'
+    ctx.lineJoin = 'round'
+    ctx.lineWidth = 2.6
+    ctx.strokeStyle = '#0f172a'
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    if (value) {
+      const img = new Image()
+      img.onload = () => ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+      img.src = value
+    }
+  }, [])
+
+  function point(evt){
+    const canvas = canvasRef.current
+    const rect = canvas.getBoundingClientRect()
+    const client = evt.touches?.[0] || evt
+    return {
+      x: (client.clientX - rect.left) * (canvas.width / rect.width),
+      y: (client.clientY - rect.top) * (canvas.height / rect.height)
+    }
+  }
+  function start(evt){
+    evt.preventDefault()
+    drawingRef.current = true
+    lastRef.current = point(evt)
+  }
+  function move(evt){
+    if (!drawingRef.current) return
+    evt.preventDefault()
+    const canvas = canvasRef.current
+    const ctx = canvas.getContext('2d')
+    const next = point(evt)
+    ctx.beginPath()
+    ctx.moveTo(lastRef.current.x, lastRef.current.y)
+    ctx.lineTo(next.x, next.y)
+    ctx.stroke()
+    lastRef.current = next
+    onChange?.(canvas.toDataURL('image/png'))
+  }
+  function end(){
+    if (!drawingRef.current) return
+    drawingRef.current = false
+    const canvas = canvasRef.current
+    onChange?.(canvas.toDataURL('image/png'))
+  }
+  function clear(){
+    const canvas = canvasRef.current
+    const ctx = canvas.getContext('2d')
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    onChange?.('')
+  }
+  return <div className="signature-pad-wrap">
+    <canvas
+      ref={canvasRef}
+      width={620}
+      height={220}
+      className="signature-canvas"
+      onMouseDown={start}
+      onMouseMove={move}
+      onMouseUp={end}
+      onMouseLeave={end}
+      onTouchStart={start}
+      onTouchMove={move}
+      onTouchEnd={end}
+    />
+    <div className="signature-actions"><span>Gunakan mouse/touchscreen untuk tanda tangan.</span><button type="button" className="secondary mini-btn" onClick={clear}>Clear TTD</button></div>
+  </div>
+}
+
+function dataUrlToFile(dataUrl, filename){
+  const arr = String(dataUrl || '').split(',')
+  const mime = arr[0]?.match(/:(.*?);/)?.[1] || 'image/png'
+  const binary = atob(arr[1] || '')
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return new File([bytes], filename, { type: mime })
+}
+
 function FoodIndexScopedStyles(){
   return <style>{`
     .food-index-app, .food-index-app * { font-family: Arial, Helvetica, sans-serif !important; }
@@ -147,20 +237,28 @@ function FoodIndexScopedStyles(){
     .food-index-app input, .food-index-app select, .food-index-app textarea { font-family: Arial, Helvetica, sans-serif !important; font-weight: 500; }
     .food-index-app .panel, .food-index-app .kpi, .food-index-app .modal-card { border-radius: 22px; }
     .food-index-app .table-wrap { border-radius: 18px; }
-    .food-index-app .food-modal-backdrop { align-items: center; padding: 22px; }
-    .food-index-app .food-inspection-modal { width: min(1060px, calc(100vw - 34px)); max-height: calc(100vh - 42px); display: flex; flex-direction: column; overflow: hidden; padding: 0; }
+    .food-index-app .food-modal-backdrop { align-items: flex-start; justify-content: center; padding: 22px; overflow-y: auto; overscroll-behavior: contain; }
+    .food-index-app .food-inspection-modal { width: min(1060px, calc(100vw - 34px)); max-height: none; display: block; overflow: visible; padding: 0; margin: 0 auto 22px; }
+    .food-index-app .inspection-entry-modal { height: calc(100dvh - 44px); max-height: calc(100dvh - 44px) !important; display: flex !important; flex-direction: column !important; overflow: hidden !important; margin: 0 auto !important; }
+    .food-index-app .inspection-modal-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 0; scroll-behavior: smooth; overscroll-behavior: contain; }
+    .food-index-app .inspection-modal-body::-webkit-scrollbar { width: 10px; }
+    .food-index-app .inspection-modal-body::-webkit-scrollbar-thumb { background:#94a3b8; border-radius:999px; }
+    .food-index-app .inspection-entry-modal .food-modal-head, .food-index-app .inspection-entry-modal .sticky-actions { flex: 0 0 auto; }
+    .food-index-app .inspection-entry-modal .sticky-actions { position: static !important; }
     .food-index-app .food-modal-head { padding: 26px 30px 18px; border-bottom: 1px solid #e8eef8; }
     .food-index-app .food-modal-head h3 { margin: 4px 0 6px; font-size: 30px; line-height: 1.08; }
     .food-index-app .food-modal-head p { margin: 0; color: #667694; font-weight: 500; }
     .food-index-app .modal-eyebrow { color: #2563eb; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
     .food-index-app .close-btn { width: 46px; height: 46px; border-radius: 14px; }
+    .food-index-app .food-modal-backdrop::-webkit-scrollbar { width: 10px; }
+    .food-index-app .food-modal-backdrop::-webkit-scrollbar-thumb { background:#94a3b8; border-radius:999px; }
     .food-index-app .inspection-summary { display: grid; grid-template-columns: 1fr 1fr 2.2fr; gap: 12px; padding: 16px 30px 0; }
     .food-index-app .inspection-summary > div { background: #f8fbff; border: 1px solid #dfe9f8; border-radius: 16px; padding: 12px 14px; min-height: 58px; }
     .food-index-app .inspection-summary small { display:block; color:#64748b; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing:.04em; }
     .food-index-app .inspection-summary b { color:#0f172a; font-size: 22px; }
     .food-index-app .inspection-summary span { display:block; margin-top:4px; color:#334155; font-weight: 600; }
     .food-index-app .inspection-note { margin: 14px 30px 0; border-radius: 14px; line-height: 1.45; }
-    .food-index-app .inspection-scroll { flex: 1; overflow: auto; padding: 16px 30px 22px; display: grid; gap: 14px; }
+    .food-index-app .inspection-scroll { overflow: visible; padding: 16px 30px 22px; display: grid; gap: 14px; }
     .food-index-app .inspection-item { background:#fff; border:1px solid #e2eaf6; border-radius: 18px; padding: 16px; box-shadow: 0 10px 28px rgba(15, 23, 42, .05); }
     .food-index-app .inspection-item.finding { border-color:#fecaca; background: linear-gradient(180deg, #fff, #fffafa); }
     .food-index-app .inspection-item.passed { border-color:#bbf7d0; }
@@ -184,6 +282,38 @@ function FoodIndexScopedStyles(){
     .food-index-app .upload-card span { color:#64748b; font-size: 12px; line-height:1.35; }
     .food-index-app .evidence-link { display:inline-flex; align-items:center; color:#2563eb; font-weight:700; margin-top: 8px; }
     .food-index-app .no-evidence-note { background:#f8fafc; border:1px dashed #e2e8f0; border-radius: 14px; color:#64748b; padding: 12px 14px; font-size: 14px; }
+    .food-index-app .signature-section { margin: 0 30px 20px; padding: 18px; border: 1px solid #dbe7f7; border-radius: 20px; background: #f8fbff; max-height: none; overflow: visible; }
+    .food-index-app .signature-section-head { display:flex; align-items:flex-start; justify-content:space-between; gap: 14px; margin-bottom: 14px; }
+    .food-index-app .signature-section-head h4 { margin:0 0 6px; font-size:20px; color:#0f172a; }
+    .food-index-app .signature-section-head p { margin:0; color:#64748b; line-height:1.4; }
+    .food-index-app .signature-mode-tabs { display:flex; flex-wrap:wrap; gap: 10px; margin-bottom: 14px; }
+    .food-index-app .signature-mode-tabs button { background:#fff !important; color:#1d4ed8; border:1px solid #bfdbfe; box-shadow:none; padding: 10px 14px; border-radius: 999px; }
+    .food-index-app .signature-mode-tabs button.active { background:#2563eb !important; color:#fff; border-color:#2563eb; }
+    .food-index-app .signature-search-box { display:grid; grid-template-columns: minmax(260px,1fr) auto; gap: 10px; align-items:end; margin-bottom: 12px; }
+    .food-index-app .signature-search-box label, .food-index-app .signature-form-grid label { display:block; color:#334155; font-size:13px; font-weight:700; }
+    .food-index-app .signature-search-box input, .food-index-app .signature-form-grid input { width:100%; margin-top:7px; border:1px solid #dbe7f7; border-radius: 14px; padding: 12px; min-height: 46px; background:#fff; }
+    .food-index-app .driver-results { grid-column: 1 / -1; display:grid; gap: 8px; max-height: 190px; overflow:auto; }
+    .food-index-app .driver-results button { background:#fff !important; color:#0f172a; box-shadow:none; border:1px solid #dbe7f7; justify-content:flex-start; text-align:left; display:flex; flex-direction:column; align-items:flex-start; gap: 3px; padding: 10px 12px; }
+    .food-index-app .driver-results button span { color:#64748b; font-size:12px; }
+    .food-index-app .signature-form-grid { display:grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 10px; margin-bottom: 12px; }
+    .food-index-app .signature-pad-wrap { background:#fff; border:1px solid #dbe7f7; border-radius: 18px; padding: 12px; }
+    .food-index-app .signature-empty-hint { background:#fff; border:1px dashed #bfdbfe; border-radius:18px; padding:20px; text-align:center; color:#64748b; font-weight:700; margin-bottom:12px; }
+    .food-index-app .signature-canvas { width:100%; height: 190px; display:block; border-radius: 14px; border:1px dashed #93c5fd; background:#fff; touch-action:none; }
+    .food-index-app .signature-actions { display:flex; justify-content:space-between; gap: 10px; align-items:center; margin-top: 8px; color:#64748b; font-size: 12px; }
+    .food-index-app .mini-btn { padding: 8px 12px; min-height: auto; font-size: 12px; }
+    .food-index-app .signature-add-row { display:flex; justify-content:flex-end; margin: 12px 0; }
+    .food-index-app .signature-list { display:grid; gap: 10px; }
+    .food-index-app .signature-list-item { display:grid; grid-template-columns: 1fr 160px auto; gap: 12px; align-items:center; background:#fff; border:1px solid #dbe7f7; border-radius: 16px; padding: 10px 12px; }
+    .food-index-app .signature-list-item b { display:block; color:#0f172a; }
+    .food-index-app .signature-list-item span { display:block; color:#64748b; font-size:12px; margin-top:3px; }
+    .food-index-app .signature-list-item img { max-height:64px; max-width: 150px; object-fit:contain; border:1px solid #e2e8f0; border-radius: 10px; background:#fff; }
+    .food-index-app .signature-list-item a { color:#2563eb; font-weight:700; }
+    .food-index-app .approval-signature-box { border:1px solid #dbe7f7; background:#f8fbff; border-radius:18px; padding:16px; margin-top: 8px; }
+    @media (max-width: 760px) {
+      .food-index-app .signature-section { margin-left: 18px; margin-right: 18px; }
+      .food-index-app .signature-search-box, .food-index-app .signature-form-grid, .food-index-app .signature-list-item { grid-template-columns: 1fr; }
+      .food-index-app .signature-canvas { height: 160px; }
+    }
 
     .food-index-app .approval-detail-grid { display:grid; grid-template-columns: repeat(5, minmax(160px, 1fr)); gap: 12px; }
     .food-index-app .approval-detail-grid > div { background:#f8fafc; border:1px solid #e2e8f0; border-radius: 14px; padding: 12px; min-height: 74px; }
@@ -708,6 +838,8 @@ function FoodIndexScopedStyles(){
     @media (max-width: 760px) {
       .food-index-app .food-modal-backdrop { align-items:flex-start !important; overflow:auto !important; padding:10px !important; }
       .food-index-app .food-inspection-modal { width:100% !important; max-height:none !important; min-height:calc(100dvh - 20px); overflow:visible !important; }
+      .food-index-app .inspection-entry-modal { height:calc(100dvh - 20px) !important; max-height:calc(100dvh - 20px) !important; min-height:0 !important; overflow:hidden !important; }
+      .food-index-app .inspection-modal-body { overflow-y:auto !important; min-height:0 !important; }
       .food-index-app .inspection-scroll { max-height:none !important; overflow:visible !important; }
       .food-index-app .sticky-actions { position:sticky; bottom:0; }
       .food-index-app .dashboard-admin-filters { grid-template-columns:1fr; }
@@ -719,6 +851,142 @@ function FoodIndexScopedStyles(){
     .food-index-app .panel-actions { display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
     .food-index-app .action-cell { display:flex; gap:8px; align-items:center; flex-wrap:wrap; white-space:nowrap; }
     .food-index-app button.small { min-height:34px; padding:7px 11px; font-size:12px; border-radius:10px; }
+
+
+    /* v53 PC/mobile single-scroll inspection modal: no separated checklist/signature scroll */
+    .food-index-app .food-modal-backdrop {
+      align-items: flex-start !important;
+      justify-content: center !important;
+      overflow-y: auto !important;
+      overflow-x: hidden !important;
+      padding: 22px !important;
+      overscroll-behavior: contain !important;
+    }
+    .food-index-app .food-inspection-modal.inspection-entry-modal {
+      width: min(1060px, calc(100vw - 34px)) !important;
+      height: auto !important;
+      min-height: 0 !important;
+      max-height: none !important;
+      display: block !important;
+      overflow: visible !important;
+      margin: 0 auto 22px !important;
+    }
+    .food-index-app .inspection-entry-modal .food-modal-head,
+    .food-index-app .inspection-entry-modal .sticky-actions {
+      flex: none !important;
+    }
+    .food-index-app .inspection-modal-body {
+      display: block !important;
+      flex: none !important;
+      min-height: 0 !important;
+      max-height: none !important;
+      overflow: visible !important;
+      overflow-y: visible !important;
+      overflow-x: visible !important;
+      padding: 0 !important;
+    }
+    .food-index-app .inspection-modal-body::-webkit-scrollbar {
+      width: 0 !important;
+      height: 0 !important;
+    }
+    .food-index-app .inspection-scroll,
+    .food-index-app .signature-section {
+      max-height: none !important;
+      overflow: visible !important;
+    }
+    .food-index-app .sticky-actions {
+      position: static !important;
+      bottom: auto !important;
+      background: #fff !important;
+      border-top: 1px solid #e8eef8 !important;
+      padding: 16px 30px 22px !important;
+      margin: 0 !important;
+    }
+    @media (max-width: 760px) {
+      .food-index-app .food-modal-backdrop {
+        padding: 10px !important;
+      }
+      .food-index-app .food-inspection-modal.inspection-entry-modal {
+        width: 100% !important;
+        min-height: calc(100dvh - 20px) !important;
+        height: auto !important;
+        max-height: none !important;
+        overflow: visible !important;
+      }
+      .food-index-app .inspection-modal-body {
+        overflow: visible !important;
+        max-height: none !important;
+      }
+      .food-index-app .sticky-actions {
+        position: static !important;
+        padding-left: 18px !important;
+        padding-right: 18px !important;
+      }
+    }
+
+
+    /* v54: PC inspection checklist + signature share one large continuous scroll area */
+    @media (min-width: 761px) {
+      .food-index-app .food-modal-backdrop {
+        align-items: center !important;
+        padding: 18px !important;
+        overflow: hidden !important;
+      }
+      .food-index-app .food-inspection-modal.inspection-entry-modal {
+        width: min(1120px, calc(100vw - 36px)) !important;
+        height: calc(100dvh - 36px) !important;
+        max-height: calc(100dvh - 36px) !important;
+        display: flex !important;
+        flex-direction: column !important;
+        overflow: hidden !important;
+        margin: 0 auto !important;
+      }
+      .food-index-app .inspection-entry-modal .food-modal-head,
+      .food-index-app .inspection-entry-modal .sticky-actions {
+        flex: 0 0 auto !important;
+      }
+      .food-index-app .inspection-modal-body {
+        flex: 1 1 auto !important;
+        min-height: 0 !important;
+        display: flex !important;
+        flex-direction: column !important;
+        overflow: hidden !important;
+        padding: 0 !important;
+      }
+      .food-index-app .inspection-summary,
+      .food-index-app .inspection-note {
+        flex: 0 0 auto !important;
+      }
+      .food-index-app .inspection-scroll {
+        flex: 1 1 auto !important;
+        min-height: 430px !important;
+        max-height: none !important;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        padding: 16px 30px 22px !important;
+        display: grid !important;
+        gap: 14px !important;
+        align-content: start !important;
+      }
+      .food-index-app .inspection-scroll::-webkit-scrollbar { width: 10px; }
+      .food-index-app .inspection-scroll::-webkit-scrollbar-thumb { background:#94a3b8; border-radius:999px; }
+      .food-index-app .signature-section {
+        margin: 4px 0 0 !important;
+        padding: 18px !important;
+        max-height: none !important;
+        overflow: visible !important;
+      }
+      .food-index-app .sticky-actions {
+        position: static !important;
+        bottom: auto !important;
+        flex: 0 0 auto !important;
+        background: #fff !important;
+        border-top: 1px solid #e8eef8 !important;
+        padding: 16px 30px 22px !important;
+        margin: 0 !important;
+      }
+    }
+
   `}</style>
 }
 
@@ -1341,6 +1609,13 @@ function FoodTasks({ context, profile }){
   const [parameters, setParameters] = useState([])
   const [activeTask, setActiveTask] = useState(null)
   const [answers, setAnswers] = useState({})
+  const [signatures, setSignatures] = useState([])
+  const [signerMode, setSignerMode] = useState('db')
+  const [signerForm, setSignerForm] = useState({ signer_name:'', signer_nrp:'', signer_role:'', signer_company:'', signatureDataUrl:'' })
+  const [driverSearch, setDriverSearch] = useState('')
+  const [driverResults, setDriverResults] = useState([])
+  const [signaturePadKey, setSignaturePadKey] = useState(0)
+  const [searchingDriver, setSearchingDriver] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const monday = startOfWeekMonday()
 
@@ -1383,10 +1658,17 @@ function FoodTasks({ context, profile }){
         if (error) throw error
         currentTask = data
       }
-      const { data: existing, error: ae } = await supabase.from('food_inspection_answers')
-        .select('*, food_findings(corrective_action, preventive_action)')
-        .eq('task_id', currentTask.id)
+      const [{ data: existing, error: ae }, { data: existingSignatures, error: se }] = await Promise.all([
+        supabase.from('food_inspection_answers')
+          .select('*, food_findings(corrective_action, preventive_action)')
+          .eq('task_id', currentTask.id),
+        supabase.from('food_inspection_signatures')
+          .select('*')
+          .eq('task_id', currentTask.id)
+          .order('signed_at', { ascending:true })
+      ])
       if (ae) throw ae
+      if (se && !String(se.message || '').includes('food_inspection_signatures')) throw se
       const next = {}
       parameters.forEach(p => { next[p.id] = { score:'', note:'', evidenceUrl:'', evidenceFile:null } })
       ;(existing || []).forEach(a => {
@@ -1398,12 +1680,94 @@ function FoodTasks({ context, profile }){
         }
       })
       setAnswers(next)
+      setSignatures((existingSignatures || []).map(row => ({
+        id: row.id,
+        signer_name: row.signer_name || '',
+        signer_nrp: row.signer_nrp || '',
+        signer_role: row.signer_role || '',
+        signer_company: row.signer_company || '',
+        signatureUrl: row.signature_url || '',
+        existing: true
+      })))
+      setSignerMode('db')
+      setSignerForm({ signer_name:'', signer_nrp:'', signer_role:'', signer_company:'', signatureDataUrl:'' })
+      setDriverSearch('')
+      setDriverResults([])
+      setSignaturePadKey(prev => prev + 1)
       setActiveTask(currentTask)
       setTasks(await fetchTasks())
     } catch(e){ setError(e.message) }
   }
   function setAnswer(parameterId, patch){
     setAnswers(prev => ({ ...prev, [parameterId]: { ...(prev[parameterId] || {}), ...patch } }))
+  }
+  async function searchDrivers(){
+    const term = cleanText(driverSearch)
+    if (term.length < 2) { setDriverResults([]); return }
+    setSearchingDriver(true); setError('')
+    try {
+      let q = supabase.from('drivers')
+        .select('id, nama_driver, nrp_driver, email, vendor_name, site_id, sites(site_code,site_name)')
+        .or(`nrp_driver.ilike.%${term}%,nama_driver.ilike.%${term}%`)
+        .limit(15)
+      if (!adminCanSeeAll(context) && context?.site_id) q = q.eq('site_id', context.site_id)
+      const { data, error } = await q
+      if (error) throw error
+      setDriverResults(data || [])
+    } catch(e){ setError(e.message) }
+    setSearchingDriver(false)
+  }
+  function selectDriverSigner(driver){
+    setSignerForm(prev => ({
+      ...prev,
+      signer_name: driver?.nama_driver || '',
+      signer_nrp: driver?.nrp_driver || '',
+      signer_company: driver?.vendor_name || driver?.sites?.site_code || contextSiteName(context) || '',
+      signer_role: prev.signer_role || 'GL / Inspektor'
+    }))
+  }
+  function addSignature(){
+    const name = cleanText(signerForm.signer_name)
+    if (!name) { setError('Nama petugas tanda tangan wajib diisi.'); return }
+    if (!cleanText(signerForm.signatureDataUrl)) { setError('Tanda tangan canvas wajib diisi sebelum ditambahkan.'); return }
+    setSignatures(prev => [...prev, {
+      tempId: crypto.randomUUID(),
+      signer_name: name,
+      signer_nrp: cleanText(signerForm.signer_nrp),
+      signer_role: cleanText(signerForm.signer_role),
+      signer_company: cleanText(signerForm.signer_company),
+      signatureDataUrl: signerForm.signatureDataUrl,
+      existing: false
+    }])
+    setSignerForm({ signer_name:'', signer_nrp:'', signer_role:'', signer_company:'', signatureDataUrl:'' })
+    setDriverSearch('')
+    setDriverResults([])
+    setSignaturePadKey(prev => prev + 1)
+    setError('')
+  }
+  function removeSignature(index){
+    setSignatures(prev => prev.filter((_, i) => i !== index))
+  }
+  async function saveNewSignatures(taskId){
+    const newSignatures = signatures.filter(s => !s.existing)
+    if (!newSignatures.length) return
+    const rows = []
+    for (const sig of newSignatures) {
+      const file = dataUrlToFile(sig.signatureDataUrl, `signature-${sig.signer_nrp || sig.signer_name || 'petugas'}.png`)
+      const signatureUrl = await uploadFoodImage(file, 'signatures')
+      rows.push({
+        task_id: taskId,
+        signer_name: sig.signer_name,
+        signer_nrp: sig.signer_nrp || null,
+        signer_role: sig.signer_role || null,
+        signer_company: sig.signer_company || null,
+        signature_url: signatureUrl,
+        signed_at: new Date().toISOString(),
+        created_by: profile?.id || null
+      })
+    }
+    const { error } = await supabase.from('food_inspection_signatures').insert(rows)
+    if (error) throw error
   }
   async function submitInspection(){
     setSubmitting(true); setMsg(''); setError('')
@@ -1418,6 +1782,7 @@ function FoodTasks({ context, profile }){
           if (!a.evidenceFile && !a.evidenceUrl) throw new Error(`Foto evidence wajib untuk temuan: ${p.parameter_text}`)
         }
       }
+      if (!signatures.length) throw new Error('Minimal 1 petugas/peserta inspeksi wajib tanda tangan sebelum submit.')
       const answerRows = []
       const findingPayload = []
       for (const p of parameters) {
@@ -1467,6 +1832,7 @@ function FoodTasks({ context, profile }){
           if (oe) throw oe
         }
       }
+      await saveNewSignatures(activeTask.id)
       const nextTaskStatus = findingPayload.length ? 'Need Action Plan' : 'Waiting Approval'
       const { error:te } = await supabase.from('food_weekly_tasks')
         .update({ status:nextTaskStatus, submitted_at:new Date().toISOString(), gl_user_id:profile?.id, updated_at:new Date().toISOString() })
@@ -1491,7 +1857,7 @@ function FoodTasks({ context, profile }){
     <Panel title="Export Tasklist" action={<button onClick={()=>downloadXlsx('food-index-tasklist.xlsx', rows)}><Download size={16}/> Export</button>}>
       <Table rows={rows} empty="Belum ada task untuk diexport." />
     </Panel>
-    {activeTask && <div className="modal-backdrop food-modal-backdrop"><div className="modal-card wide-modal food-inspection-modal">
+    {activeTask && <div className="modal-backdrop food-modal-backdrop"><div className="modal-card wide-modal food-inspection-modal inspection-entry-modal">
       <div className="modal-head food-modal-head">
         <div>
           <span className="modal-eyebrow">Task Mingguan</span>
@@ -1500,6 +1866,7 @@ function FoodTasks({ context, profile }){
         </div>
         <button className="icon close-btn" onClick={()=>setActiveTask(null)} aria-label="Tutup modal"><X size={18}/></button>
       </div>
+      <div className="inspection-modal-body">
       <div className="inspection-summary">
         <div><small>Parameter terisi</small><b>{answeredCount}/{parameters.length}</b></div>
         <div><small>Temuan</small><b>{findingCount}</b></div>
@@ -1544,6 +1911,42 @@ function FoodTasks({ context, profile }){
             </div> : <div className="no-evidence-note">Pilih <b>0</b> jika ada temuan, lalu isi catatan dan upload foto evidence.</div>}
           </div>
         })}
+      <section className="signature-section">
+        <div className="signature-section-head">
+          <div><h4>Tanda Tangan Petugas / Peserta Inspeksi</h4><p>Minimal 1 tanda tangan wajib sebelum submit. Pilih data dari NRP existing atau input manual.</p></div>
+          <StatusPill value={`${signatures.length} TTD`} />
+        </div>
+        <div className="signature-mode-tabs">
+          <button type="button" className={signerMode === 'db' ? 'active' : ''} onClick={()=>setSignerMode('db')}>Cari NRP di Database</button>
+          <button type="button" className={signerMode === 'manual' ? 'active' : ''} onClick={()=>setSignerMode('manual')}>Input Manual</button>
+        </div>
+        {signerMode === 'db' && <div className="signature-search-box">
+          <label>Search NRP / Nama Driver<input value={driverSearch} onChange={e=>setDriverSearch(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') searchDrivers() }} placeholder="Contoh: MTKD12345 atau Budi" /></label>
+          <button type="button" className="secondary" onClick={searchDrivers} disabled={searchingDriver}>{searchingDriver ? 'Mencari...' : 'Cari'}</button>
+          {!!driverResults.length && <div className="driver-results">
+            {driverResults.map(d => <button type="button" key={d.id} onClick={()=>selectDriverSigner(d)}>
+              <b>{d.nama_driver}</b><span>{d.nrp_driver || '-'} · {d.sites?.site_code || '-'}</span>
+            </button>)}
+          </div>}
+        </div>}
+        <div className="signature-form-grid">
+          <label>Nama Petugas<input value={signerForm.signer_name} onChange={e=>setSignerForm(prev=>({...prev, signer_name:e.target.value}))} placeholder="Nama petugas" /></label>
+          <label>NRP<input value={signerForm.signer_nrp} onChange={e=>setSignerForm(prev=>({...prev, signer_nrp:e.target.value}))} placeholder="NRP / ID bila ada" /></label>
+          <label>Jabatan / Role<input value={signerForm.signer_role} onChange={e=>setSignerForm(prev=>({...prev, signer_role:e.target.value}))} placeholder="GL / Inspektor / Vendor / dll" /></label>
+          <label>Instansi / Vendor / Site<input value={signerForm.signer_company} onChange={e=>setSignerForm(prev=>({...prev, signer_company:e.target.value}))} placeholder="Instansi / vendor / site" /></label>
+        </div>
+        {cleanText(signerForm.signer_name) ? <SignaturePad key={`signature-pad-${signaturePadKey}-${signerMode}`} value={signerForm.signatureDataUrl} onChange={dataUrl=>setSignerForm(prev=>({...prev, signatureDataUrl:dataUrl}))} /> : <div className="signature-empty-hint">Isi atau pilih data petugas terlebih dahulu sebelum membubuhkan tanda tangan berikutnya.</div>}
+        <div className="signature-add-row"><button type="button" onClick={addSignature}>+ Tambah Tanda Tangan</button></div>
+        <div className="signature-list">
+          {signatures.map((sig, idx) => <div className="signature-list-item" key={sig.id || sig.tempId || idx}>
+            <div><b>{sig.signer_name}</b><span>{sig.signer_nrp || '-'} · {sig.signer_role || '-'} · {sig.signer_company || '-'}</span></div>
+            {sig.signatureUrl ? <a href={sig.signatureUrl} target="_blank" rel="noreferrer">Lihat TTD</a> : <img src={sig.signatureDataUrl} alt={`Tanda tangan ${sig.signer_name}`} />}
+            {!sig.existing && <button type="button" className="secondary mini-btn" onClick={()=>removeSignature(idx)}>Hapus</button>}
+          </div>)}
+          {!signatures.length && <div className="no-evidence-note">Belum ada tanda tangan. Tambahkan minimal 1 petugas sebelum submit.</div>}
+        </div>
+      </section>
+      </div>
       </div>
       <div className="modal-actions sticky-actions"><button className="secondary" onClick={()=>setActiveTask(null)} disabled={submitting}>Batal</button><button onClick={submitInspection} disabled={submitting}>{submitting ? 'Menyimpan...' : 'Submit Inspeksi'}</button></div>
     </div></div>}
@@ -1761,6 +2164,7 @@ function FoodApproval({ context, profile }){
           *,
           sites(site_code, site_name),
           food_vendors(vendor_name),
+          food_inspection_signatures(*),
           food_inspection_answers(
             id,
             score,
@@ -1972,6 +2376,16 @@ function FoodApproval({ context, profile }){
             </div>
           </div>
         })}
+        <section className="approval-signature-box">
+          <div className="signature-section-head"><div><h4>Tanda Tangan Petugas / Peserta Inspeksi</h4><p>Daftar petugas yang menandatangani hasil inspeksi sebelum submit.</p></div><StatusPill value={`${(active.food_inspection_signatures || []).length} TTD`} /></div>
+          <div className="signature-list">
+            {(active.food_inspection_signatures || []).map(sig => <div className="signature-list-item" key={sig.id}>
+              <div><b>{sig.signer_name}</b><span>{sig.signer_nrp || '-'} · {sig.signer_role || '-'} · {sig.signer_company || '-'}</span></div>
+              {sig.signature_url ? <a href={sig.signature_url} target="_blank" rel="noreferrer">Lihat TTD</a> : <span>-</span>}
+            </div>)}
+            {!(active.food_inspection_signatures || []).length && <div className="no-evidence-note">Belum ada tanda tangan tersimpan pada inspeksi ini.</div>}
+          </div>
+        </section>
         <label className="field-block"><span>Catatan Reject</span><textarea rows={3} placeholder="Isi jika approval ditolak" value={rejectNote} onChange={e=>setRejectNote(e.target.value)} /></label>
       </div>
       <div className="modal-actions sticky-actions">
