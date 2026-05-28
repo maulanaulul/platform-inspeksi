@@ -10,9 +10,14 @@ import * as XLSX from 'xlsx'
 const ADMIN_ROLES = ['Platform Admin', 'App Admin']
 const ATASAN_ROLES = ['Atasan Site']
 const GL_ROLES = ['GL', 'Site Admin', 'Admin Site']
+// Role Food Index yang tampil di UI. Nilai ini disimpan di food_role_level, bukan enum app_role.
+const FOOD_ACCESS_ROLES = ['Administrator', 'GL', 'Section Head', 'Dept Head']
+// Role enum app_role yang benar-benar valid di database. Jangan kirim role UI langsung ke kolom role.
+const FOOD_DB_ACCESS_ROLES = ['Platform Admin', 'App Admin', 'GL', 'Atasan Site']
+const FOOD_ROLE_TARGETS = { GL: 4, 'Section Head': 2, 'Dept Head': 1 }
 function canAdmin(role){ return ADMIN_ROLES.includes(role) }
 function canApprove(role){ return ADMIN_ROLES.includes(role) || ATASAN_ROLES.includes(role) }
-function canInspect(role){ return ADMIN_ROLES.includes(role) || GL_ROLES.includes(role) }
+function canInspect(role){ return ADMIN_ROLES.includes(role) || GL_ROLES.includes(role) || ATASAN_ROLES.includes(role) }
 function cleanText(v){ return String(v ?? '').trim() }
 function today(){ return new Date().toISOString().slice(0, 10) }
 function startOfWeekMonday(date = new Date()){
@@ -56,6 +61,7 @@ function adminCanSeeAll(context){ return canAdmin(context?.role) }
 
 const MENUS = [
   ['dashboard', 'Dashboard', LayoutDashboard],
+  ['admin', 'Admin Panel', Users],
   ['vendors', 'Master Vendor Catering', Store],
   ['parameters', 'Master Parameter', FileSpreadsheet],
   ['tasks', 'Tasklist Inspeksi', ClipboardCheck],
@@ -69,9 +75,10 @@ export default function FoodIndexApp({ embeddedProfile, embeddedContext, embedde
   const context = embeddedContext || embeddedWork
   const [page, setPage] = useState('dashboard')
   const [sidebar, setSidebar] = useState(false)
+  const [selfPasswordOpen, setSelfPasswordOpen] = useState(false)
 
   const menu = MENUS.filter(([key]) => {
-    if (['vendors','parameters'].includes(key)) return canAdmin(context?.role)
+    if (['admin','vendors','parameters'].includes(key)) return canAdmin(context?.role)
     if (key === 'approval') return canApprove(context?.role)
     if (key === 'tasks') return canInspect(context?.role)
     return true
@@ -84,6 +91,7 @@ export default function FoodIndexApp({ embeddedProfile, embeddedContext, embedde
   const pageTitle = menu.find(([key]) => key === page)?.[1] || 'Food Index'
   const desc = {
     dashboard: 'Monitoring task mingguan, achievement, alert keterlambatan, dan outstanding Food Index.',
+    admin: 'Kelola akses user Food Index, role, site, dan pembuatan password login.',
     vendors: 'Master vendor catering khusus Food Index. Site menggunakan master site platform existing.',
     parameters: 'Master parameter inspeksi Food Index. Parameter dapat ditambah manual atau upload Excel.',
     tasks: 'Tasklist inspeksi otomatis mingguan berdasarkan vendor catering aktif per site.',
@@ -114,12 +122,14 @@ export default function FoodIndexApp({ embeddedProfile, embeddedContext, embedde
         <div className="header-copy"><h2>{pageTitle}</h2><p>{desc[page] || 'Kelola Food Index.'}</p></div>
         <div className="header-actions redesign-actions">
           <div className="user-chip"><Users size={16}/><span>{profile?.nama || profile?.email} · {contextSiteName(context)}</span></div>
+          <button className="secondary" onClick={()=>setSelfPasswordOpen(true)}>Ganti Password Saya</button>
           <button className="secondary" onClick={onChangeApp}>Ganti Aplikasi</button>
           <button className="secondary" onClick={()=>supabase.auth.signOut()}><LogOut size={16}/> Logout</button>
         </div>
       </header>
       <section className="content">
         {page === 'dashboard' && <FoodDashboard context={context} />}
+        {page === 'admin' && <FoodAdminPanel context={context} profile={profile} />}
         {page === 'vendors' && <FoodVendors context={context} />}
         {page === 'parameters' && <FoodParameters context={context} />}
         {page === 'tasks' && <FoodTasks context={context} profile={profile} />}
@@ -128,6 +138,66 @@ export default function FoodIndexApp({ embeddedProfile, embeddedContext, embedde
         {page === 'report' && <FoodReport context={context} />}
       </section>
     </main>
+    {selfPasswordOpen && <SelfPasswordModal profile={profile} onClose={()=>setSelfPasswordOpen(false)} />}
+  </div>
+}
+
+
+function SelfPasswordModal({ profile, onClose }){
+  const [form, setForm] = useState({ oldPassword:'', newPassword:'', confirmPassword:'' })
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState('')
+  const [err, setErr] = useState('')
+  async function submit(e){
+    e.preventDefault()
+    setErr(''); setMsg('')
+    const email = cleanText(profile?.email)
+    const oldPassword = cleanText(form.oldPassword)
+    const newPassword = cleanText(form.newPassword)
+    const confirmPassword = cleanText(form.confirmPassword)
+    try {
+      if (!email) throw new Error('Email akun tidak ditemukan. Silakan login ulang.')
+      if (!oldPassword) throw new Error('Password lama wajib diisi.')
+      if (!newPassword || newPassword.length < 6) throw new Error('Password baru minimal 6 karakter.')
+      if (newPassword !== confirmPassword) throw new Error('Konfirmasi password baru tidak sama.')
+      if (oldPassword === newPassword) throw new Error('Password baru tidak boleh sama dengan password lama.')
+      setSaving(true)
+      const { error: verifyError } = await supabase.auth.signInWithPassword({ email, password: oldPassword })
+      if (verifyError) throw new Error('Password lama tidak sesuai.')
+      const { error: updateError } = await supabase.auth.updateUser({ password: newPassword })
+      if (updateError) throw updateError
+      setMsg('Password berhasil diganti. Gunakan password baru pada login berikutnya.')
+      setForm({ oldPassword:'', newPassword:'', confirmPassword:'' })
+      setTimeout(()=>onClose?.(), 1200)
+    } catch (e2) {
+      setErr(e2.message || 'Gagal mengganti password.')
+    } finally {
+      setSaving(false)
+    }
+  }
+  return <div className="modal-backdrop food-modal-backdrop self-password-backdrop" role="dialog" aria-modal="true">
+    <div className="modal-card self-password-modal">
+      <div className="modal-head compact-head">
+        <div>
+          <span className="modal-eyebrow">Akun Saya</span>
+          <h3>Ganti Password Saya</h3>
+          <p>Password akan diperbarui hanya untuk akun yang sedang login.</p>
+        </div>
+        <button className="secondary close-btn" onClick={onClose}>×</button>
+      </div>
+      <form className="self-password-form" onSubmit={submit}>
+        {err && <div className="error">{err}</div>}
+        {msg && <div className="success">{msg}</div>}
+        <label>Email akun<input value={profile?.email || ''} disabled /></label>
+        <label>Password lama<input type="password" autoComplete="current-password" value={form.oldPassword} onChange={e=>setForm({...form, oldPassword:e.target.value})} placeholder="Masukkan password lama" /></label>
+        <label>Password baru<input type="password" autoComplete="new-password" value={form.newPassword} onChange={e=>setForm({...form, newPassword:e.target.value})} placeholder="Minimal 6 karakter" /></label>
+        <label>Konfirmasi password baru<input type="password" autoComplete="new-password" value={form.confirmPassword} onChange={e=>setForm({...form, confirmPassword:e.target.value})} placeholder="Ulangi password baru" /></label>
+        <div className="modal-actions inline-actions">
+          <button type="button" className="secondary" onClick={onClose}>Batal</button>
+          <button disabled={saving}>{saving ? 'Menyimpan...' : 'Simpan Password'}</button>
+        </div>
+      </form>
+    </div>
   </div>
 }
 
@@ -246,6 +316,34 @@ function FoodIndexScopedStyles(){
     .food-index-app .inspection-entry-modal .food-modal-head, .food-index-app .inspection-entry-modal .sticky-actions { flex: 0 0 auto; }
     .food-index-app .inspection-entry-modal .sticky-actions { position: static !important; }
     .food-index-app .food-modal-head { padding: 26px 30px 18px; border-bottom: 1px solid #e8eef8; }
+
+    .food-index-app .self-password-backdrop {
+      position: fixed !important;
+      inset: 0 !important;
+      z-index: 9999 !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      padding: 18px !important;
+      background: rgba(15, 23, 42, .56) !important;
+      backdrop-filter: blur(8px) !important;
+      overflow: auto !important;
+    }
+    .food-index-app .self-password-modal {
+      width: min(520px, calc(100vw - 32px));
+      max-height: calc(100dvh - 36px);
+      overflow: auto;
+      margin: auto;
+      position: relative;
+      z-index: 10000;
+      background: #fff;
+    }
+    .food-index-app .compact-head h3 { font-size: 24px; margin: 4px 0 6px; }
+    .food-index-app .self-password-form { display:grid; gap: 12px; padding: 18px 22px 22px; }
+    .food-index-app .self-password-form label { display:grid; gap: 7px; color:#334155; font-size: 13px; font-weight: 700; }
+    .food-index-app .self-password-form input { width:100%; min-height:46px; border:1px solid #dbe7f7; border-radius: 14px; padding: 10px 12px; background:#fff; color:#0f172a; }
+    .food-index-app .self-password-form input:disabled { background:#f8fafc; color:#64748b; }
+    .food-index-app .inline-actions { display:flex; justify-content:flex-end; gap:10px; margin-top: 4px; }
     .food-index-app .food-modal-head h3 { margin: 4px 0 6px; font-size: 30px; line-height: 1.08; }
     .food-index-app .food-modal-head p { margin: 0; color: #667694; font-weight: 500; }
     .food-index-app .modal-eyebrow { color: #2563eb; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
@@ -1015,6 +1113,22 @@ function FoodIndexScopedStyles(){
       }
     }
 
+
+    /* v56 Food Index Admin Panel & role participation dashboard */
+    .food-index-app .food-admin-panel .form-grid { align-items:end; }
+    .food-index-app .upload-actions { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:14px; }
+    .food-index-app .upload-tile { display:inline-flex; align-items:center; gap:10px; border:1px dashed #93c5fd; background:#eff6ff; color:#1d4ed8; padding:16px 18px; border-radius:18px; cursor:pointer; font-weight:800; }
+    .food-index-app .role-participation-card { margin-top: 0; }
+    .food-index-app .role-alert-stack { display:grid; gap:10px; margin: 8px 0 16px; }
+    .food-index-app .role-alert { display:flex; align-items:flex-start; gap:10px; padding:12px 14px; border:1px solid #fed7aa; background:#fff7ed; color:#9a3412; border-radius:16px; font-weight:700; line-height:1.35; }
+    .food-index-app .signature-live-search { grid-template-columns: 1fr 70px !important; }
+    .food-index-app .signature-live-search > button[disabled] { opacity:.55; cursor:not-allowed; }
+    .food-index-app .readonly-signature-grid input[readonly] { background:#f8fbff; color:#334155; }
+    .food-index-app .driver-results { grid-column: 1 / -1; display:grid; gap:8px; max-height:220px; overflow:auto; padding:8px; border:1px solid #dbe7f7; border-radius:16px; background:#fff; }
+    .food-index-app .driver-results button { text-align:left; border:1px solid #dbe7f7; background:#f8fbff !important; color:#0f172a !important; box-shadow:none !important; border-radius:14px; padding:10px 12px; }
+    .food-index-app .driver-results button b { display:block; }
+    .food-index-app .driver-results button span { display:block; color:#64748b; font-size:12px; margin-top:3px; }
+
   `}</style>
 }
 
@@ -1043,6 +1157,224 @@ function applySiteFilter(query, context, field='site_id'){
   return query.eq(field, context.site_id)
 }
 
+function normalizeRole(value){
+  const v = cleanText(value)
+  const found = FOOD_ACCESS_ROLES.find(r => r.toLowerCase() === v.toLowerCase())
+  if (found) return found
+  if (['Platform Admin', 'App Admin'].some(r => r.toLowerCase() === v.toLowerCase())) return 'Administrator'
+  if (v.toLowerCase() === 'atasan site') return 'Section Head'
+  return v
+}
+function roleTarget(role){ return FOOD_ROLE_TARGETS[normalizeRole(role)] || 0 }
+function foodUiRoleToDbRole(role){
+  const r = normalizeRole(role)
+  if (r === 'Administrator') return 'App Admin'
+  if (r === 'GL') return 'GL'
+  if (r === 'Section Head' || r === 'Dept Head') return 'Atasan Site'
+  return r
+}
+function foodRoleFromAccess(row){
+  return normalizeRole(row?.food_role_level || row?.role || '')
+}
+function buildFoodAccessPayload(row){
+  const foodRole = normalizeRole(row.role)
+  return {
+    ...row,
+    role: foodUiRoleToDbRole(foodRole),
+    food_role_level: foodRole,
+    site_id: foodRole === 'Administrator' ? null : (cleanText(row.site_id) || null)
+  }
+}
+async function getFoodIndexApplication(){
+  const { data, error } = await supabase
+    .from('applications')
+    .select('id, app_code, app_name, status')
+    .or('app_code.ilike.%food%,app_name.ilike.%food%')
+    .limit(5)
+  if (error) throw error
+  const app = (data || []).find(a => String(a.app_name || '').toLowerCase().includes('food')) || (data || [])[0]
+  if (!app) throw new Error('Aplikasi Food Index belum ditemukan di tabel applications.')
+  return app
+}
+function ymFromDate(dateText){ return String(dateText || '').slice(0,7) }
+function sameMonth(dateText, year, month){
+  if (!dateText) return false
+  const [y,m] = String(dateText).split('-')
+  return (year === 'ALL' || y === String(year)) && (month === 'ALL' || m === String(month).padStart(2,'0'))
+}
+
+
+function FoodAdminPanel({ context, profile }){
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState('')
+  const [error, setError] = useState('')
+  const [sites, setSites] = useState([])
+  const [app, setApp] = useState(null)
+  const [accessRows, setAccessRows] = useState([])
+  const [manual, setManual] = useState({ nama:'', nrp:'', email:'', password:'', role:'GL', site_id:'' })
+  const [uploadRows, setUploadRows] = useState([])
+  const [resetForm, setResetForm] = useState({ access_id:'', password:'' })
+
+  useEffect(() => { load() }, [context?.id])
+  useEffect(() => { if (!msg) return; const t = setTimeout(()=>setMsg(''), 7000); return () => clearTimeout(t) }, [msg])
+
+  async function load(){
+    setLoading(true); setError('')
+    try {
+      const [siteData, foodApp] = await Promise.all([fetchSites(), getFoodIndexApplication()])
+      setSites(siteData || [])
+      setApp(foodApp)
+      setManual(prev => ({ ...prev, site_id: prev.site_id || context?.site_id || '' }))
+      let q = supabase.from('user_app_access')
+        .select('id,user_id,app_id,role,food_role_level,site_id,status,created_at,users_profile(id,nama,email,nrp,status),sites(id,site_code,site_name)')
+        .eq('app_id', foodApp.id)
+        .order('created_at', { ascending:false })
+      if (!adminCanSeeAll(context) && context?.site_id) q = q.eq('site_id', context.site_id)
+      const { data, error } = await q
+      if (error) throw error
+      setAccessRows(data || [])
+    } catch(e){ setError(e.message) }
+    setLoading(false)
+  }
+  function validateUserPayload(row){
+    const foodRole = normalizeRole(row.role)
+    if (!FOOD_ACCESS_ROLES.includes(foodRole)) throw new Error(`Role tidak valid: ${row.role}. Gunakan Administrator, GL, Section Head, atau Dept Head.`)
+    if (foodRole !== 'Administrator' && !cleanText(row.site_id)) throw new Error('Site wajib dipilih untuk role GL, Section Head, dan Dept Head.')
+    if (!cleanText(row.email)) throw new Error('Email wajib diisi.')
+    if (!cleanText(row.password) || cleanText(row.password).length < 6) throw new Error('Password minimal 6 karakter.')
+    return buildFoodAccessPayload({ ...row, role: foodRole })
+  }
+  async function createOneUser(e){
+    e?.preventDefault?.()
+    setSaving(true); setMsg(''); setError('')
+    try {
+      if (!app?.id) throw new Error('Aplikasi Food Index belum siap.')
+      const payload = validateUserPayload({ ...manual, app_id: app.id })
+      const { data, error } = await supabase.functions.invoke('admin-create-user', { body: payload })
+      if (error) throw error
+      if (data?.error) throw new Error(data.error)
+      if (!data?.auth_user_id) throw new Error('User belum terbuat di Supabase Auth. Deploy ulang Edge Function admin-create-user versi terbaru lalu coba lagi.')
+      setMsg(`User ${manual.email} berhasil dibuat dan dimapping ke Food Index. Auth ID: ${data.auth_user_id}`)
+      setManual({ nama:'', nrp:'', email:'', password:'', role:'GL', site_id:context?.site_id || '' })
+      await load()
+    } catch(e){ setError(e.message) }
+    setSaving(false)
+  }
+  async function handleUploadExcel(file){
+    setError(''); setMsg('')
+    if (!file) return
+    const buf = await file.arrayBuffer()
+    const wb = XLSX.read(buf)
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]] || {})
+    const parsed = rows.map((raw, idx) => {
+      const r = normalizeRow(raw)
+      const siteCode = cleanText(getVal(r, ['site_code','SITE_CODE','site','Site']))
+      const site = sites.find(s => String(s.site_code).toLowerCase() === siteCode.toLowerCase())
+      const role = normalizeRole(getVal(r, ['role','Role','ROLE'])) || 'GL'
+      const email = cleanText(getVal(r, ['email','Email','EMAIL']))
+      const password = cleanText(getVal(r, ['password','Password','PASSWORD']))
+      const nama = cleanText(getVal(r, ['nama','Nama','NAMA','name','Name']))
+      const nrp = cleanText(getVal(r, ['nrp','NRP','nrp_driver','NRP_DRIVER']))
+      const issues = []
+      if (!FOOD_ACCESS_ROLES.includes(role)) issues.push('role tidak valid')
+      if (role !== 'Administrator' && !site) issues.push('site_code tidak ditemukan')
+      if (!email) issues.push('email kosong')
+      if (!password || password.length < 6) issues.push('password minimal 6 karakter')
+      return { row: idx + 2, nama, nrp, email, password, role, site_code:siteCode, site_id: role === 'Administrator' ? '' : (site?.id || ''), status: issues.length ? `Error: ${issues.join(', ')}` : 'Valid' }
+    })
+    setUploadRows(parsed)
+    const invalid = parsed.filter(r => r.status !== 'Valid').length
+    setMsg(invalid ? `Preview selesai. Ada ${invalid} baris perlu diperbaiki.` : `Preview selesai. ${parsed.length} baris valid dan siap diimport.`)
+  }
+  async function importExcelUsers(){
+    setSaving(true); setError(''); setMsg('')
+    try {
+      if (!app?.id) throw new Error('Aplikasi Food Index belum siap.')
+      const valid = uploadRows.filter(r => r.status === 'Valid')
+      if (!valid.length) throw new Error('Tidak ada baris valid untuk diimport.')
+      const notes = []
+      for (const r of valid) {
+        const payload = validateUserPayload({ ...r, app_id: app.id })
+        const { data, error } = await supabase.functions.invoke('admin-create-user', { body: payload })
+        if (error || data?.error || !data?.auth_user_id) notes.push(`Baris ${r.row}: gagal (${error?.message || data?.error || 'auth_user_id kosong'})`)
+        else notes.push(`Baris ${r.row}: sukses ${r.email}`)
+      }
+      setMsg(`Import selesai. ${notes.join(' | ')}`)
+      setUploadRows([])
+      await load()
+    } catch(e){ setError(e.message) }
+    setSaving(false)
+  }
+  async function resetUserPassword(e){
+    e?.preventDefault?.()
+    setSaving(true); setError(''); setMsg('')
+    try {
+      const access = accessRows.find(r => String(r.id) === String(resetForm.access_id))
+      if (!access) throw new Error('Pilih akun yang akan diganti passwordnya.')
+      if (!cleanText(resetForm.password) || cleanText(resetForm.password).length < 6) throw new Error('Password baru minimal 6 karakter.')
+      const email = access.users_profile?.email || ''
+      if (!email) throw new Error('Email user tidak ditemukan pada profile.')
+      const { data, error } = await supabase.functions.invoke('admin-create-user', {
+        body: {
+          action: 'reset_password',
+          target_user_id: access.users_profile?.id,
+          target_email: email,
+          password: resetForm.password,
+          new_password: resetForm.password
+        }
+      })
+      if (error) throw error
+      if (data?.error) throw new Error(data.error)
+      if (!data?.auth_user_id) throw new Error('Password belum terupdate di Supabase Auth. Deploy ulang Edge Function admin-create-user versi terbaru.')
+      setMsg(`Password ${email} berhasil diganti. Auth ID: ${data.auth_user_id}`)
+      setResetForm({ access_id:'', password:'' })
+    } catch(e){ setError(e.message) }
+    setSaving(false)
+  }
+
+  function downloadTemplate(){
+    downloadXlsx('template-user-food-index.xlsx', [{ nama:'Budi Santoso', nrp:'NRP001', email:'budi@email.com', password:'Password123', role:'GL', site_code:'JIEP' }])
+  }
+  const tableRows = accessRows.map(r => ({
+    email: r.users_profile?.email || '-',
+    nama: r.users_profile?.nama || '-',
+    nrp: r.users_profile?.nrp || '-',
+    role: foodRoleFromAccess(r),
+    db_role: r.role,
+    site: r.sites?.site_code || 'All Site',
+    status: r.status || '-'
+  }))
+  return <div className="stack food-admin-panel">
+    {msg && <div className="success">{msg}</div>}{error && <div className="error">{error}</div>}
+    <Panel title="Tambah User Food Index" desc="Membuat akun login Supabase Auth sekaligus mapping akses Food Index." action={<button className="secondary" onClick={load} disabled={loading}>{loading ? 'Memuat...' : 'Refresh'}</button>}>
+      <form className="form-grid" onSubmit={createOneUser}>
+        <label>Nama<input value={manual.nama} onChange={e=>setManual({...manual,nama:e.target.value})} placeholder="Nama user" /></label>
+        <label>NRP<input value={manual.nrp} onChange={e=>setManual({...manual,nrp:e.target.value})} placeholder="NRP / ID" /></label>
+        <label>Email<input type="email" value={manual.email} onChange={e=>setManual({...manual,email:e.target.value})} placeholder="email@domain.com" /></label>
+        <label>Password<input type="text" value={manual.password} onChange={e=>setManual({...manual,password:e.target.value})} placeholder="Minimal 6 karakter" /></label>
+        <label>Role<select value={manual.role} onChange={e=>setManual({...manual,role:e.target.value,site_id:e.target.value==='Administrator'?'':manual.site_id})}>{FOOD_ACCESS_ROLES.map(r=><option key={r} value={r}>{r}</option>)}</select></label>
+        <label>Site<select value={manual.site_id} onChange={e=>setManual({...manual,site_id:e.target.value})} disabled={manual.role==='Administrator'}><option value="">{manual.role === 'Administrator' ? 'All Site' : 'Pilih Site'}</option>{sites.map(s=><option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}</select></label>
+        <button disabled={saving}>{saving ? 'Menyimpan...' : 'Buat User Food Index'}</button>
+      </form>
+    </Panel>
+    <Panel title="Upload User Food Index Excel" desc="Kolom: nama, nrp, email, password, role, site_code. Role: Administrator, GL, Section Head, Dept Head." action={<button className="secondary" onClick={downloadTemplate}><Download size={16}/> Download Template</button>}>
+      <div className="upload-actions"><label className="upload-tile"><Upload size={20}/><b>Upload Excel</b><input type="file" accept=".xlsx,.xls" hidden onChange={e=>handleUploadExcel(e.target.files?.[0])}/></label>{!!uploadRows.length && <button onClick={importExcelUsers} disabled={saving}>{saving ? 'Importing...' : 'Submit Import Valid'}</button>}</div>
+      {!!uploadRows.length && <div className="table-wrap" style={{maxHeight:320, overflow:'auto'}}><table><thead><tr><th>Row</th><th>Nama</th><th>NRP</th><th>Email</th><th>Role</th><th>Site Code</th><th>Status</th></tr></thead><tbody>{uploadRows.map(r=><tr key={r.row}><td>{r.row}</td><td>{r.nama}</td><td>{r.nrp}</td><td>{r.email}</td><td>{r.role}</td><td>{r.site_code || '-'}</td><td>{r.status}</td></tr>)}</tbody></table></div>}
+    </Panel>
+    <Panel title="Ganti Password User Food Index" desc="Administrator dapat mengganti password masing-masing akun Food Index. Password akan langsung diupdate ke Supabase Auth.">
+      <form className="form-grid" onSubmit={resetUserPassword}>
+        <label>User<select value={resetForm.access_id} onChange={e=>setResetForm({...resetForm, access_id:e.target.value})}><option value="">Pilih user</option>{accessRows.map(r => <option key={r.id} value={r.id}>{r.users_profile?.email || '-'} · {r.users_profile?.nama || '-'} · {foodRoleFromAccess(r)} · {r.sites?.site_code || 'All Site'}</option>)}</select></label>
+        <label>Password Baru<input type="text" value={resetForm.password} onChange={e=>setResetForm({...resetForm,password:e.target.value})} placeholder="Minimal 6 karakter" /></label>
+        <button disabled={saving || !resetForm.access_id}>{saving ? 'Menyimpan...' : 'Ganti Password'}</button>
+      </form>
+    </Panel>
+    <Panel title="Row Data Akses Food Index" desc="Akses aktif akan muncul sebagai pilihan petugas tanda tangan inspeksi." action={<button className="secondary" onClick={()=>downloadXlsx('akses-user-food-index.xlsx', tableRows)}><Download size={16}/> Export</button>}>
+      <Table rows={tableRows} columns={['email','nama','nrp','role','db_role','site','status']} empty="Belum ada akses Food Index." />
+    </Panel>
+  </div>
+}
+
 function FoodDashboard({ context }){
   const now = new Date()
   const [loading, setLoading] = useState(true)
@@ -1056,6 +1388,7 @@ function FoodDashboard({ context }){
   const [tasks, setTasks] = useState([])
   const [outs, setOuts] = useState([])
   const [parameters, setParameters] = useState([])
+  const [signatureRows, setSignatureRows] = useState([])
   const weekEnd = weekFilter === 'ALL' ? '' : endOfWeekSunday(weekFilter)
   const weekLabel = weekFilter === 'ALL' ? 'All Week' : `${weekFilter} s/d ${weekEnd}`
   const monthLabel = monthFilter === 'ALL' ? 'All Month' : monthFilter
@@ -1095,19 +1428,27 @@ function FoodDashboard({ context }){
         .limit(1000)
       let vq = supabase.from('food_vendors').select('id, site_id, vendor_name, status').eq('status','Aktif')
       let pq = supabase.from('food_parameters').select('id').eq('status','Aktif')
+      let sq = supabase
+        .from('food_inspection_signatures')
+        .select('id, task_id, signer_user_id, site_id, signer_name, signer_nrp, signer_role, signed_at, food_weekly_tasks!inner(id, site_id, week_start_date, week_end_date, status, sites(site_code,site_name))')
+        .order('signed_at', { ascending:false })
+        .limit(5000)
+      if (monthStart && monthEndDate) sq = sq.gte('food_weekly_tasks.week_start_date', monthStart).lte('food_weekly_tasks.week_start_date', monthEndDate)
       tq = applySiteFilter(tq, context)
       vq = applySiteFilter(vq, context)
-      if (!adminCanSeeAll(context)) oq = oq.eq('task_id', '00000000-0000-0000-0000-000000000000')
-      if (adminCanSeeAll(context) && siteFilter) { tq = tq.eq('site_id', siteFilter); vq = vq.eq('site_id', siteFilter) }
-      const [{ data:t, error:te }, { data:o, error:oe }, { data:v, error:ve }, { data:p, error:pe }] = await Promise.all([tq, oq, vq, pq])
+      if (!adminCanSeeAll(context)) { oq = oq.eq('task_id', '00000000-0000-0000-0000-000000000000'); sq = sq.eq('food_weekly_tasks.site_id', context.site_id) }
+      if (adminCanSeeAll(context) && siteFilter) { tq = tq.eq('site_id', siteFilter); vq = vq.eq('site_id', siteFilter); sq = sq.eq('food_weekly_tasks.site_id', siteFilter) }
+      const [{ data:t, error:te }, { data:o, error:oe }, { data:v, error:ve }, { data:p, error:pe }, { data:sigs, error:se }] = await Promise.all([tq, oq, vq, pq, sq])
       if (te) throw te
       if (ve) throw ve
       if (pe) throw pe
       if (oe && adminCanSeeAll(context)) throw oe
+      if (se && !String(se.message || '').includes('food_inspection_signatures')) throw se
       setTasks(t || [])
       setOuts(adminCanSeeAll(context) ? (o || []) : [])
       setVendors(v || [])
       setParameters(p || [])
+      setSignatureRows(sigs || [])
     } catch(e){ setError(e.message) }
     setLoading(false)
   }
@@ -1186,6 +1527,30 @@ function FoodDashboard({ context }){
 
   function pct(n, d){ return d ? Math.round((n / d) * 100) : 0 }
   const siteSource = adminCanSeeAll(context) ? sites : [{ id: context?.site_id, site_code: contextSiteName(context), site_name: contextSiteName(context) }]
+  const roleParticipationRows = siteSource
+    .filter(s => !siteFilter || s.id === siteFilter)
+    .map((s, idx) => {
+      const siteSignatures = signatureRows.filter(sig => {
+        const task = sig.food_weekly_tasks || {}
+        return task.site_id === s.id && sameMonth(task.week_start_date, yearFilter, monthFilter)
+      })
+      const counts = {}
+      Object.keys(FOOD_ROLE_TARGETS).forEach(role => { counts[role] = siteSignatures.filter(sig => normalizeRole(sig.signer_role) === role).length })
+      const remarks = Object.entries(FOOD_ROLE_TARGETS).map(([role, target]) => `${role}: ${counts[role] || 0}/${target} ${counts[role] >= target ? 'Tercapai' : 'Belum tercapai'}`)
+      const allOk = Object.entries(FOOD_ROLE_TARGETS).every(([role, target]) => (counts[role] || 0) >= target)
+      return {
+        no: idx + 1,
+        site: s.site_code || '-',
+        site_name: s.site_name || '-',
+        gl: `${counts.GL || 0}/4`,
+        section_head: `${counts['Section Head'] || 0}/2`,
+        dept_head: `${counts['Dept Head'] || 0}/1`,
+        status: allOk ? 'Tercapai' : 'Belum tercapai',
+        remark: remarks.join(' | ')
+      }
+    })
+  const roleParticipationAlerts = roleParticipationRows.filter(r => r.status !== 'Tercapai')
+
   const resumeRows = siteSource
     .filter(s => !siteFilter || s.id === siteFilter)
     .map((s, idx) => {
@@ -1250,25 +1615,31 @@ function FoodDashboard({ context }){
       <div className="dash-kpi"><small>Expired</small><strong>{expired}</strong><span className="red">Impact achievement</span></div>
     </div>
 
+    {adminCanSeeAll(context) && <section className="dashboard-card analysis-table compact-card role-participation-card">
+      <div className="dashboard-card-head"><div><h3>Partisipasi Inspeksi per Role</h3><p>Target per site per bulan dihitung dari user yang ikut tanda tangan inspeksi: GL 4x, Section Head 2x, Dept Head 1x.</p></div><button onClick={()=>downloadXlsx('partisipasi-role-food-index.xlsx', roleParticipationRows)}>Export</button></div>
+      {!!roleParticipationAlerts.length && <div className="role-alert-stack">{roleParticipationAlerts.slice(0,6).map(r => <div className="role-alert" key={r.site}><AlertTriangle size={16}/><span>{r.site}: {r.remark}</span></div>)}</div>}
+      <Table rows={roleParticipationRows} columns={['no','site','site_name','gl','section_head','dept_head','status','remark']} empty="Belum ada data tanda tangan pada filter ini." />
+    </section>}
+
     {adminCanSeeAll(context) && <section className="dashboard-card analysis-table resume-table compact-card">
       <div className="dashboard-card-head"><div><h3>Resume Achievement per Site</h3><p>Ringkasan 3 dashboard utama per site: Score Food Index, Skor Pelaksanaan Inspeksi, dan Leadtime Perbaikan.</p></div><button onClick={()=>downloadXlsx('resume-achievement-food-index-per-site.xlsx', resumeRows)}>Export</button></div>
       <Table rows={resumeRows} columns={['no','site','site_name','score_food_index','skor_pelaksanaan','leadtime_perbaikan','achievement_site','remark']} empty="Belum ada data resume." />
     </section>}
 
-    {adminCanSeeAll(context) && <div className="dashboard-analysis-grid">
+    <div className={adminCanSeeAll(context) ? 'dashboard-analysis-grid' : 'dashboard-analysis-grid site-role-dashboard-grid'}>
       <section className="dashboard-card analysis-table">
         <div className="dashboard-card-head"><div><h3>Score Food Index per Inspeksi</h3><p>Dihitung dari jumlah parameter sesuai dibanding total parameter inspeksi. Score ≥ 95% = Tercapai.</p></div><button onClick={()=>downloadXlsx('score-food-index.xlsx', scoreRows)}>Export</button></div>
         <Table rows={scoreRows} columns={['no','site','vendor','minggu','parameter','sesuai','temuan','score','remark','status']} empty="Belum ada inspeksi pada filter ini." />
       </section>
-      <section className="dashboard-card analysis-table">
+      {adminCanSeeAll(context) && <section className="dashboard-card analysis-table">
         <div className="dashboard-card-head"><div><h3>Skor Pelaksanaan Inspeksi</h3><p>Jumlah vendor yang sudah diinspeksi dibagi jumlah vendor aktif pada bulan terpilih.</p></div><button onClick={()=>downloadXlsx('skor-pelaksanaan-inspeksi.xlsx', executionRows)}>Export</button></div>
         <Table rows={executionRows} />
-      </section>
-      <section className="dashboard-card analysis-table">
+      </section>}
+      {adminCanSeeAll(context) && <section className="dashboard-card analysis-table">
         <div className="dashboard-card-head"><div><h3>Leadtime Perbaikan</h3><p>Remark Tercapai jika close outstanding tidak melewati due date. Jika lewat due date, Tidak tercapai.</p></div><button onClick={()=>downloadXlsx('leadtime-perbaikan-food-index.xlsx', leadtimeRows)}>Export</button></div>
         <Table rows={leadtimeRows} empty="Belum ada due date perbaikan." />
-      </section>
-    </div>}
+      </section>}
+    </div>
 
     <div className="dashboard-main-grid">
       <section className="dashboard-card report-preview-card">
@@ -1638,12 +2009,10 @@ function FoodTasks({ context, profile }){
   const [activeTask, setActiveTask] = useState(null)
   const [answers, setAnswers] = useState({})
   const [signatures, setSignatures] = useState([])
-  const [signerMode, setSignerMode] = useState('db')
-  const [signerForm, setSignerForm] = useState({ signer_name:'', signer_nrp:'', signer_role:'', signer_company:'', signatureDataUrl:'' })
-  const [driverSearch, setDriverSearch] = useState('')
-  const [driverResults, setDriverResults] = useState([])
+  const [signerForm, setSignerForm] = useState({ signer_user_id:'', site_id:'', signer_name:'', signer_nrp:'', signer_role:'', signer_company:'', signatureDataUrl:'' })
+  const [signerSearch, setSignerSearch] = useState('')
+  const [eligibleSigners, setEligibleSigners] = useState([])
   const [signaturePadKey, setSignaturePadKey] = useState(0)
-  const [searchingDriver, setSearchingDriver] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const monday = startOfWeekMonday()
 
@@ -1710,6 +2079,8 @@ function FoodTasks({ context, profile }){
       setAnswers(next)
       setSignatures((existingSignatures || []).map(row => ({
         id: row.id,
+        signer_user_id: row.signer_user_id || '',
+        site_id: row.site_id || '',
         signer_name: row.signer_name || '',
         signer_nrp: row.signer_nrp || '',
         signer_role: row.signer_role || '',
@@ -1717,10 +2088,9 @@ function FoodTasks({ context, profile }){
         signatureUrl: row.signature_url || '',
         existing: true
       })))
-      setSignerMode('db')
-      setSignerForm({ signer_name:'', signer_nrp:'', signer_role:'', signer_company:'', signatureDataUrl:'' })
-      setDriverSearch('')
-      setDriverResults([])
+      setSignerForm({ signer_user_id:'', site_id:'', signer_name:'', signer_nrp:'', signer_role:'', signer_company:'', signatureDataUrl:'' })
+      setSignerSearch('')
+      setEligibleSigners(await loadEligibleSigners(currentTask.site_id))
       setSignaturePadKey(prev => prev + 1)
       setActiveTask(currentTask)
       setTasks(await fetchTasks())
@@ -1729,47 +2099,64 @@ function FoodTasks({ context, profile }){
   function setAnswer(parameterId, patch){
     setAnswers(prev => ({ ...prev, [parameterId]: { ...(prev[parameterId] || {}), ...patch } }))
   }
-  async function searchDrivers(){
-    const term = cleanText(driverSearch)
-    if (term.length < 2) { setDriverResults([]); return }
-    setSearchingDriver(true); setError('')
+  async function loadEligibleSigners(siteId){
     try {
-      let q = supabase.from('drivers')
-        .select('id, nama_driver, nrp_driver, email, vendor_name, site_id, sites(site_code,site_name)')
-        .or(`nrp_driver.ilike.%${term}%,nama_driver.ilike.%${term}%`)
-        .limit(15)
-      if (!adminCanSeeAll(context) && context?.site_id) q = q.eq('site_id', context.site_id)
+      const foodApp = await getFoodIndexApplication()
+      let q = supabase.from('user_app_access')
+        .select('user_id,role,food_role_level,site_id,status,users_profile(id,nama,email,nrp,status),sites(site_code,site_name)')
+        .eq('app_id', foodApp.id)
+        .eq('status', 'Aktif')
+        .in('role', FOOD_DB_ACCESS_ROLES)
+        .limit(1000)
+      if (!adminCanSeeAll(context) && siteId) q = q.eq('site_id', siteId)
       const { data, error } = await q
       if (error) throw error
-      setDriverResults(data || [])
-    } catch(e){ setError(e.message) }
-    setSearchingDriver(false)
+      return (data || []).filter(r => {
+        const roleLevel = foodRoleFromAccess(r)
+        if (roleLevel === 'Administrator') return true
+        return !siteId || r.site_id === siteId
+      })
+    } catch(e) {
+      setError(`Gagal memuat daftar user tanda tangan: ${e.message}`)
+      return []
+    }
   }
-  function selectDriverSigner(driver){
-    setSignerForm(prev => ({
-      ...prev,
-      signer_name: driver?.nama_driver || '',
-      signer_nrp: driver?.nrp_driver || '',
-      signer_company: driver?.vendor_name || driver?.sites?.site_code || contextSiteName(context) || '',
-      signer_role: prev.signer_role || 'GL / Inspektor'
-    }))
+  function selectUserSigner(row){
+    const profile = row?.users_profile || {}
+    setSignerForm({
+      signer_user_id: row?.user_id || profile?.id || '',
+      site_id: row?.site_id || activeTask?.site_id || '',
+      signer_name: profile?.nama || profile?.email || '',
+      signer_nrp: profile?.nrp || '',
+      signer_role: foodRoleFromAccess(row),
+      signer_company: row?.sites?.site_code || activeTask?.sites?.site_code || contextSiteName(context) || '',
+      signatureDataUrl: ''
+    })
+    setSignaturePadKey(prev => prev + 1)
   }
+  const filteredEligibleSigners = eligibleSigners.filter(r => {
+    const term = signerSearch.toLowerCase().trim()
+    if (!term) return false
+    const p = r.users_profile || {}
+    return String(p.nama || '').toLowerCase().includes(term) || String(p.nrp || '').toLowerCase().includes(term) || String(p.email || '').toLowerCase().includes(term)
+  }).slice(0, 12)
   function addSignature(){
     const name = cleanText(signerForm.signer_name)
     if (!name) { setError('Nama petugas tanda tangan wajib diisi.'); return }
     if (!cleanText(signerForm.signatureDataUrl)) { setError('Tanda tangan canvas wajib diisi sebelum ditambahkan.'); return }
     setSignatures(prev => [...prev, {
       tempId: crypto.randomUUID(),
+      signer_user_id: cleanText(signerForm.signer_user_id),
+      site_id: cleanText(signerForm.site_id),
       signer_name: name,
       signer_nrp: cleanText(signerForm.signer_nrp),
-      signer_role: cleanText(signerForm.signer_role),
+      signer_role: normalizeRole(signerForm.signer_role),
       signer_company: cleanText(signerForm.signer_company),
       signatureDataUrl: signerForm.signatureDataUrl,
       existing: false
     }])
-    setSignerForm({ signer_name:'', signer_nrp:'', signer_role:'', signer_company:'', signatureDataUrl:'' })
-    setDriverSearch('')
-    setDriverResults([])
+    setSignerForm({ signer_user_id:'', site_id:'', signer_name:'', signer_nrp:'', signer_role:'', signer_company:'', signatureDataUrl:'' })
+    setSignerSearch('')
     setSignaturePadKey(prev => prev + 1)
     setError('')
   }
@@ -1785,6 +2172,8 @@ function FoodTasks({ context, profile }){
       const signatureUrl = await uploadFoodImage(file, 'signatures')
       rows.push({
         task_id: taskId,
+        signer_user_id: sig.signer_user_id || null,
+        site_id: sig.site_id || activeTask?.site_id || null,
         signer_name: sig.signer_name,
         signer_nrp: sig.signer_nrp || null,
         signer_role: sig.signer_role || null,
@@ -1941,29 +2330,29 @@ function FoodTasks({ context, profile }){
         })}
       <section className="signature-section">
         <div className="signature-section-head">
-          <div><h4>Tanda Tangan Petugas / Peserta Inspeksi</h4><p>Minimal 1 tanda tangan wajib sebelum submit. Pilih data dari NRP existing atau input manual.</p></div>
+          <div><h4>Tanda Tangan Petugas / Peserta Inspeksi</h4><p>Minimal 1 tanda tangan wajib sebelum submit. Cari user berdasarkan NRP/nama dari akses Food Index site terkait.</p></div>
           <StatusPill value={`${signatures.length} TTD`} />
         </div>
-        <div className="signature-mode-tabs">
-          <button type="button" className={signerMode === 'db' ? 'active' : ''} onClick={()=>setSignerMode('db')}>Cari NRP di Database</button>
-          <button type="button" className={signerMode === 'manual' ? 'active' : ''} onClick={()=>setSignerMode('manual')}>Input Manual</button>
-        </div>
-        {signerMode === 'db' && <div className="signature-search-box">
-          <label>Search NRP / Nama Driver<input value={driverSearch} onChange={e=>setDriverSearch(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') searchDrivers() }} placeholder="Contoh: MTKD12345 atau Budi" /></label>
-          <button type="button" className="secondary" onClick={searchDrivers} disabled={searchingDriver}>{searchingDriver ? 'Mencari...' : 'Cari'}</button>
-          {!!driverResults.length && <div className="driver-results">
-            {driverResults.map(d => <button type="button" key={d.id} onClick={()=>selectDriverSigner(d)}>
-              <b>{d.nama_driver}</b><span>{d.nrp_driver || '-'} · {d.sites?.site_code || '-'}</span>
-            </button>)}
+        <div className="signature-search-box signature-live-search">
+          <label>Live Search NRP / Nama User Food Index<input value={signerSearch} onChange={e=>setSignerSearch(e.target.value)} placeholder="Ketik nama, NRP, atau email" /></label>
+          <button type="button" className="secondary" onClick={()=>setEligibleSigners(prev=>prev)} disabled>Live</button>
+          {!!filteredEligibleSigners.length && <div className="driver-results">
+            {filteredEligibleSigners.map(r => {
+              const p = r.users_profile || {}
+              return <button type="button" key={`${r.user_id}-${r.role}-${r.site_id || 'all'}`} onClick={()=>selectUserSigner(r)}>
+                <b>{p.nama || p.email}</b><span>{p.nrp || '-'} · {foodRoleFromAccess(r)} · {r.sites?.site_code || 'All Site'}</span>
+              </button>
+            })}
           </div>}
-        </div>}
-        <div className="signature-form-grid">
-          <label>Nama Petugas<input value={signerForm.signer_name} onChange={e=>setSignerForm(prev=>({...prev, signer_name:e.target.value}))} placeholder="Nama petugas" /></label>
-          <label>NRP<input value={signerForm.signer_nrp} onChange={e=>setSignerForm(prev=>({...prev, signer_nrp:e.target.value}))} placeholder="NRP / ID bila ada" /></label>
-          <label>Jabatan / Role<input value={signerForm.signer_role} onChange={e=>setSignerForm(prev=>({...prev, signer_role:e.target.value}))} placeholder="GL / Inspektor / Vendor / dll" /></label>
-          <label>Instansi / Vendor / Site<input value={signerForm.signer_company} onChange={e=>setSignerForm(prev=>({...prev, signer_company:e.target.value}))} placeholder="Instansi / vendor / site" /></label>
+          {signerSearch.trim().length >= 2 && !filteredEligibleSigners.length && <div className="signature-empty-hint">User tidak ditemukan. Pastikan user sudah dibuat di Admin Panel Food Index dan site-nya sesuai.</div>}
         </div>
-        {cleanText(signerForm.signer_name) ? <SignaturePad key={`signature-pad-${signaturePadKey}-${signerMode}`} value={signerForm.signatureDataUrl} onChange={dataUrl=>setSignerForm(prev=>({...prev, signatureDataUrl:dataUrl}))} /> : <div className="signature-empty-hint">Isi atau pilih data petugas terlebih dahulu sebelum membubuhkan tanda tangan berikutnya.</div>}
+        <div className="signature-form-grid readonly-signature-grid">
+          <label>Nama Petugas<input value={signerForm.signer_name} readOnly placeholder="Pilih dari live search" /></label>
+          <label>NRP<input value={signerForm.signer_nrp} readOnly placeholder="NRP" /></label>
+          <label>Jabatan / Role<input value={signerForm.signer_role} readOnly placeholder="Role" /></label>
+          <label>Instansi / Site<input value={signerForm.signer_company} readOnly placeholder="Site" /></label>
+        </div>
+        {cleanText(signerForm.signer_name) ? <SignaturePad key={`signature-pad-${signaturePadKey}`} value={signerForm.signatureDataUrl} onChange={dataUrl=>setSignerForm(prev=>({...prev, signatureDataUrl:dataUrl}))} /> : <div className="signature-empty-hint">Cari dan pilih user terlebih dahulu. Input manual tanda tangan dinonaktifkan agar role dan site ikut tercatat.</div>}
         <div className="signature-add-row"><button type="button" onClick={addSignature}>+ Tambah Tanda Tangan</button></div>
         <div className="signature-list">
           {signatures.map((sig, idx) => <div className="signature-list-item" key={sig.id || sig.tempId || idx}>
