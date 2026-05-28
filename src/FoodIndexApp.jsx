@@ -963,16 +963,17 @@ function FoodIndexScopedStyles(){
         max-height: none !important;
         overflow-y: auto !important;
         overflow-x: hidden !important;
-        padding: 16px 30px 22px !important;
+        padding: 16px 30px 170px !important;
         display: grid !important;
         gap: 14px !important;
         align-content: start !important;
+        scroll-padding-bottom: 180px !important;
       }
       .food-index-app .inspection-scroll::-webkit-scrollbar { width: 10px; }
       .food-index-app .inspection-scroll::-webkit-scrollbar-thumb { background:#94a3b8; border-radius:999px; }
       .food-index-app .signature-section {
-        margin: 4px 0 0 !important;
-        padding: 18px !important;
+        margin: 4px 0 80px !important;
+        padding: 18px 18px 26px !important;
         max-height: none !important;
         overflow: visible !important;
       }
@@ -984,6 +985,33 @@ function FoodIndexScopedStyles(){
         border-top: 1px solid #e8eef8 !important;
         padding: 16px 30px 22px !important;
         margin: 0 !important;
+      }
+    }
+
+
+    /* v55: keep signature form/add button visible above footer actions on PC/tablet/mobile */
+    .food-index-app .inspection-entry-modal .signature-add-row {
+      margin: 18px 0 16px !important;
+      padding-bottom: 6px !important;
+    }
+    .food-index-app .inspection-entry-modal .signature-add-row button {
+      min-height: 46px !important;
+      padding: 12px 18px !important;
+      border-radius: 14px !important;
+    }
+    .food-index-app .inspection-entry-modal .signature-pad-wrap {
+      margin-bottom: 10px !important;
+    }
+    @media (max-width: 760px) {
+      .food-index-app .inspection-scroll {
+        padding-bottom: 180px !important;
+        scroll-padding-bottom: 190px !important;
+      }
+      .food-index-app .signature-section {
+        margin-bottom: 120px !important;
+      }
+      .food-index-app .signature-canvas {
+        height: 210px !important;
       }
     }
 
