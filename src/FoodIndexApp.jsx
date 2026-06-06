@@ -206,6 +206,7 @@ function Panel({ title, desc, action, children }){
 }
 function Kpi({ title, value, icon }){ return <div className="kpi"><div><small>{title}</small><strong>{value}</strong></div><div className="kpi-icon">{icon}</div></div> }
 function StatusPill({ value }){ return <span className={`status-pill ${statusClass(value)}`}>{value || '-'}</span> }
+function TaskStatusPill({ value }){ return <span className={`status-pill task-status-pill ${statusClass(value)}`}>{value || '-'}</span> }
 
 function SignaturePad({ value, onChange }){
   const canvasRef = useRef(null)
@@ -449,10 +450,12 @@ function FoodIndexScopedStyles(){
     .food-index-app .kpi { background: linear-gradient(145deg, #ffffff 0%, #f8fbff 100%); border: 1px solid rgba(191, 219, 254, .8); box-shadow: 0 18px 48px rgba(15, 23, 42, .07); }
     .food-index-app .kpi strong { font-size: 36px; }
     .food-index-app .kpi-icon { background: linear-gradient(135deg, #eff6ff, #dbeafe); color:#2563eb; }
-    .food-index-app .table-wrap { background:#fff; border: 1px solid #dbe7f7; box-shadow: inset 0 1px 0 rgba(255,255,255,.8); }
+    .food-index-app .table-wrap { background:#fff; border: 1px solid #dbe7f7; box-shadow: inset 0 1px 0 rgba(255,255,255,.8); position:relative; }
+    .food-index-app .table-wrap table { border-collapse: separate; border-spacing: 0; }
     .food-index-app table th { background: linear-gradient(180deg, #f8fbff, #eef6ff); color:#334155; font-size: 12px; letter-spacing:.08em; }
     .food-index-app table td { vertical-align: top; }
-    .food-index-app .status-pill { border-radius: 999px; padding: 7px 11px; font-weight: 700; }
+    .food-index-app .table-wrap thead th { position: sticky; top: 0; z-index: 8; background: linear-gradient(180deg, #f8fbff 0%, #eef6ff 100%); box-shadow: 0 1px 0 #dbe7f7, 0 8px 18px rgba(15,23,42,.06); }
+    .food-index-app .status-pill { border-radius: 999px; padding: 7px 11px; font-weight: 700; display:inline-flex; align-items:center; justify-content:center; width:max-content; max-width:100%; white-space:nowrap; line-height:1.15; box-sizing:border-box; }
     .food-index-app .status-pill.ok { background:#dcfce7; color:#166534; }
     .food-index-app .status-pill.warn { background:#fef3c7; color:#92400e; }
     .food-index-app .status-pill.bad { background:#fee2e2; color:#991b1b; }
@@ -910,8 +913,40 @@ function FoodIndexScopedStyles(){
     .food-index-app .standard-box { margin-top:10px; padding:10px 12px; border-radius:14px; border:1px solid #dbeafe; background:#f8fbff; color:#334155; font-size:13px; line-height:1.45; }
     .food-index-app .camera-options { display:grid; grid-template-columns:1fr 1fr; gap:8px; width:100%; margin-top:8px; }
     .food-index-app .camera-option { min-height:44px !important; border-radius:14px !important; padding:0 10px !important; box-shadow:none !important; background:#ffffff !important; color:#1d4ed8 !important; border:1px solid #bfdbfe !important; font-size:12px !important; display:flex !important; align-items:center !important; justify-content:center !important; gap:6px !important; }
-    .food-index-app .status-task-cell { min-width:150px; max-width:180px; white-space:normal; }
-    .food-index-app .status-task-cell .status-pill { white-space:normal; text-align:center; line-height:1.2; }
+    .food-index-app .outstanding-table-wrap table { min-width: 1820px; table-layout: fixed; }
+    .food-index-app .outstanding-table-wrap th,
+    .food-index-app .outstanding-table-wrap td,
+    .food-index-app .outstanding-export-table .table-wrap th,
+    .food-index-app .outstanding-export-table .table-wrap td { white-space: normal; overflow-wrap: anywhere; word-break: normal; line-height: 1.22; }
+    .food-index-app .outstanding-table-wrap th,
+    .food-index-app .outstanding-export-table .table-wrap th { font-size: 11px; letter-spacing: .07em; vertical-align: middle; }
+    .food-index-app .outstanding-table-wrap thead th,
+    .food-index-app .outstanding-export-table .table-wrap thead th { position: sticky; top: 0; z-index: 12; background: linear-gradient(180deg, #f8fbff 0%, #eef6ff 100%) !important; box-shadow: 0 1px 0 #dbe7f7, 0 8px 18px rgba(15,23,42,.08); }
+    .food-index-app .outstanding-table-wrap th:nth-child(1), .food-index-app .outstanding-table-wrap td:nth-child(1) { width:70px; }
+    .food-index-app .outstanding-table-wrap th:nth-child(2), .food-index-app .outstanding-table-wrap td:nth-child(2) { width:155px; }
+    .food-index-app .outstanding-table-wrap th:nth-child(3), .food-index-app .outstanding-table-wrap td:nth-child(3) { width:110px; }
+    .food-index-app .outstanding-table-wrap th:nth-child(4), .food-index-app .outstanding-table-wrap td:nth-child(4) { width:220px; }
+    .food-index-app .outstanding-table-wrap th:nth-child(5), .food-index-app .outstanding-table-wrap td:nth-child(5) { width:240px; }
+    .food-index-app .outstanding-table-wrap th:nth-child(6), .food-index-app .outstanding-table-wrap td:nth-child(6) { width:100px; }
+    .food-index-app .outstanding-table-wrap th:nth-child(7), .food-index-app .outstanding-table-wrap td:nth-child(7) { width:235px; }
+    .food-index-app .outstanding-table-wrap th:nth-child(8), .food-index-app .outstanding-table-wrap td:nth-child(8) { width:250px; }
+    .food-index-app .outstanding-table-wrap th:nth-child(9), .food-index-app .outstanding-table-wrap td:nth-child(9) { width:100px; }
+    .food-index-app .outstanding-table-wrap th:nth-child(10), .food-index-app .outstanding-table-wrap td:nth-child(10) { width:170px; }
+    .food-index-app .outstanding-table-wrap th:nth-child(11), .food-index-app .outstanding-table-wrap td:nth-child(11) { width:170px; }
+    .food-index-app .status-task-cell { min-width:170px; max-width:170px; text-align:center; vertical-align:middle !important; }
+    .food-index-app .status-task-cell .task-status-pill { min-width:136px; white-space:normal; text-align:center; line-height:1.15; padding:8px 10px; }
+    .food-index-app .outstanding-export-table .table-wrap table { min-width: 1840px; table-layout: fixed; }
+    .food-index-app .outstanding-export-table .table-wrap th:nth-child(1), .food-index-app .outstanding-export-table .table-wrap td:nth-child(1) { width:80px; }
+    .food-index-app .outstanding-export-table .table-wrap th:nth-child(2), .food-index-app .outstanding-export-table .table-wrap td:nth-child(2) { width:170px; }
+    .food-index-app .outstanding-export-table .table-wrap th:nth-child(3), .food-index-app .outstanding-export-table .table-wrap td:nth-child(3) { width:110px; }
+    .food-index-app .outstanding-export-table .table-wrap th:nth-child(4), .food-index-app .outstanding-export-table .table-wrap td:nth-child(4) { width:230px; }
+    .food-index-app .outstanding-export-table .table-wrap th:nth-child(5), .food-index-app .outstanding-export-table .table-wrap td:nth-child(5) { width:245px; }
+    .food-index-app .outstanding-export-table .table-wrap th:nth-child(6), .food-index-app .outstanding-export-table .table-wrap td:nth-child(6) { width:245px; }
+    .food-index-app .outstanding-export-table .table-wrap th:nth-child(7), .food-index-app .outstanding-export-table .table-wrap td:nth-child(7) { width:255px; }
+    .food-index-app .outstanding-export-table .table-wrap th:nth-child(8), .food-index-app .outstanding-export-table .table-wrap td:nth-child(8) { width:110px; }
+    .food-index-app .outstanding-export-table .table-wrap th:nth-child(9), .food-index-app .outstanding-export-table .table-wrap td:nth-child(9) { width:180px; text-align:center; vertical-align:middle; }
+    .food-index-app .outstanding-export-table .table-wrap th:nth-child(10), .food-index-app .outstanding-export-table .table-wrap td:nth-child(10) { width:185px; text-align:center; vertical-align:middle; }
+    .food-index-app .outstanding-export-table .status-pill { white-space:normal; text-align:center; min-width:138px; line-height:1.15; padding:8px 10px; }
     .food-index-app .inspection-item.finding.approval-review-finding { background:linear-gradient(180deg,#fee2e2,#fff5f5) !important; border-color:#ef4444 !important; box-shadow:0 12px 34px rgba(239,68,68,.16) !important; }
     .food-index-app .approval-review-finding .param-index { background:#ef4444 !important; color:white !important; }
     /* v48 dashboard layout polish */
@@ -928,6 +963,39 @@ function FoodIndexScopedStyles(){
     .food-index-app .dashboard-analysis-grid { display:grid; grid-template-columns:1fr; gap:18px; margin-top:20px; }
     .food-index-app .analysis-table table { min-width:1200px; }
     .food-index-app .resume-table table { min-width:980px; }
+    .food-index-app .resume-table .capture-all-wrap {
+      max-height: none !important;
+      overflow: visible !important;
+    }
+    .food-index-app .resume-table .capture-all-wrap table {
+      width: 100% !important;
+      min-width: 0 !important;
+      table-layout: fixed !important;
+    }
+    .food-index-app .resume-table .capture-all-wrap th,
+    .food-index-app .resume-table .capture-all-wrap td {
+      padding: 8px 10px !important;
+      font-size: 13px !important;
+      line-height: 1.22 !important;
+      white-space: normal !important;
+      word-break: break-word !important;
+    }
+    .food-index-app .resume-table .capture-all-wrap th:nth-child(1),
+    .food-index-app .resume-table .capture-all-wrap td:nth-child(1) { width: 4.5%; }
+    .food-index-app .resume-table .capture-all-wrap th:nth-child(2),
+    .food-index-app .resume-table .capture-all-wrap td:nth-child(2) { width: 8%; }
+    .food-index-app .resume-table .capture-all-wrap th:nth-child(3),
+    .food-index-app .resume-table .capture-all-wrap td:nth-child(3) { width: 13%; }
+    .food-index-app .resume-table .capture-all-wrap th:nth-child(4),
+    .food-index-app .resume-table .capture-all-wrap td:nth-child(4) { width: 13%; }
+    .food-index-app .resume-table .capture-all-wrap th:nth-child(5),
+    .food-index-app .resume-table .capture-all-wrap td:nth-child(5) { width: 16%; }
+    .food-index-app .resume-table .capture-all-wrap th:nth-child(6),
+    .food-index-app .resume-table .capture-all-wrap td:nth-child(6) { width: 16%; }
+    .food-index-app .resume-table .capture-all-wrap th:nth-child(7),
+    .food-index-app .resume-table .capture-all-wrap td:nth-child(7) { width: 15%; }
+    .food-index-app .resume-table .capture-all-wrap th:nth-child(8),
+    .food-index-app .resume-table .capture-all-wrap td:nth-child(8) { width: 14.5%; }
     .food-index-app .dashboard-card.compact-card { padding:22px !important; }
     .food-index-app .dashboard-card.compact-card h3 { font-size:26px !important; }
     .food-index-app .score-badge { display:inline-flex; padding:7px 11px; border-radius:999px; font-weight:800; font-size:12px; }
@@ -1129,16 +1197,115 @@ function FoodIndexScopedStyles(){
     .food-index-app .driver-results button b { display:block; }
     .food-index-app .driver-results button span { display:block; color:#64748b; font-size:12px; margin-top:3px; }
 
+
+    /* Food Index report photo preview modal + compact photo button */
+    .food-index-app .photo-view-btn {
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      gap:6px;
+      min-height:32px;
+      padding:7px 11px;
+      border-radius:999px;
+      border:1px solid #bfdbfe;
+      background:#eff6ff !important;
+      color:#1d4ed8 !important;
+      box-shadow:none !important;
+      font-size:12px;
+      font-weight:800;
+      white-space:nowrap;
+    }
+    .food-index-app .photo-view-btn:hover { background:#dbeafe !important; }
+    .food-index-app .inline-photo-view-btn { width:max-content; align-self:flex-start; margin-top:-4px; }
+    .food-index-app .photo-view-backdrop {
+      position:fixed !important;
+      inset:0 !important;
+      z-index:10020 !important;
+      display:flex !important;
+      align-items:center !important;
+      justify-content:center !important;
+      padding:18px !important;
+      background:rgba(15,23,42,.62) !important;
+      backdrop-filter:blur(8px) !important;
+      overflow:auto !important;
+    }
+    .food-index-app .photo-view-modal {
+      width:min(860px, calc(100vw - 28px));
+      max-height:calc(100dvh - 32px);
+      display:flex;
+      flex-direction:column;
+      overflow:hidden;
+      border-radius:22px;
+      background:#fff;
+    }
+    .food-index-app .photo-view-head {
+      flex:0 0 auto;
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:14px;
+      padding:18px 20px;
+      border-bottom:1px solid #e8eef8;
+    }
+    .food-index-app .photo-view-head h3 { margin:0 0 5px; font-size:22px; line-height:1.12; color:#0f172a; }
+    .food-index-app .photo-view-head p { margin:0; color:#64748b; font-size:13px; line-height:1.35; font-weight:600; }
+    .food-index-app .photo-view-body {
+      flex:1 1 auto;
+      min-height:0;
+      padding:14px;
+      background:#0f172a;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      overflow:auto;
+    }
+    .food-index-app .photo-view-body img {
+      display:block;
+      max-width:100%;
+      max-height:calc(100dvh - 190px);
+      object-fit:contain;
+      border-radius:14px;
+      background:#fff;
+      box-shadow:0 18px 46px rgba(0,0,0,.24);
+    }
+    .food-index-app .photo-view-failed {
+      display:grid;
+      justify-items:center;
+      gap:7px;
+      color:#fff;
+      text-align:center;
+      padding:28px;
+    }
+    .food-index-app .photo-view-failed span { color:#cbd5e1; }
+    .food-index-app .photo-view-actions {
+      flex:0 0 auto;
+      display:flex;
+      justify-content:flex-end;
+      gap:10px;
+      padding:14px 18px 18px;
+      border-top:1px solid #e8eef8;
+      background:#fff;
+    }
+    @media (max-width:760px) {
+      .food-index-app .photo-view-backdrop { padding:10px !important; }
+      .food-index-app .photo-view-modal { width:100%; max-height:calc(100dvh - 20px); }
+      .food-index-app .photo-view-head { padding:14px 15px; }
+      .food-index-app .photo-view-head h3 { font-size:19px; }
+      .food-index-app .photo-view-body { padding:10px; }
+      .food-index-app .photo-view-body img { max-height:calc(100dvh - 170px); }
+    }
+
   `}</style>
 }
 
-function Table({ rows, columns, empty='Belum ada data.' }){
+function Table({ rows, columns, empty='Belum ada data.', captureAll=false }){
   const [q, setQ] = useState('')
   const cols = columns || (rows[0] ? Object.keys(rows[0]) : [])
   const filtered = rows.filter(r => !q || JSON.stringify(r).toLowerCase().includes(q.toLowerCase()))
-  return <div>
+  const wrapStyle = captureAll ? { maxHeight: 'none', overflow: 'visible' } : { maxHeight: 420, overflow: 'auto' }
+  return <div className={captureAll ? 'capture-table-root' : ''}>
     <div className="table-toolbar"><div className="searchbox"><Search size={18}/><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search row data..." /></div></div>
-    <div className="table-wrap" style={{maxHeight: 420, overflow: 'auto'}}><table><thead><tr>{cols.map(c => <th key={c}>{c}</th>)}</tr></thead><tbody>{filtered.map((r,i)=><tr key={r.id || i}>{cols.map(c => <td key={c}>{renderCell(r[c])}</td>)}</tr>)}</tbody></table>{!filtered.length && <p className="muted table-empty">{empty}</p>}</div>
+    <div className={captureAll ? 'table-wrap capture-all-wrap' : 'table-wrap'} style={wrapStyle}><table><thead><tr>{cols.map(c => <th key={c}>{c}</th>)}</tr></thead><tbody>{filtered.map((r,i)=><tr key={r.id || i}>{cols.map(c => <td key={c}>{renderCell(r[c])}</td>)}</tr>)}</tbody></table>{!filtered.length && <p className="muted table-empty">{empty}</p>}</div>
   </div>
 }
 function renderCell(v){
@@ -1623,7 +1790,7 @@ function FoodDashboard({ context }){
 
     {adminCanSeeAll(context) && <section className="dashboard-card analysis-table resume-table compact-card">
       <div className="dashboard-card-head"><div><h3>Resume Achievement per Site</h3><p>Ringkasan 3 dashboard utama per site: Score Food Index, Skor Pelaksanaan Inspeksi, dan Leadtime Perbaikan.</p></div><button onClick={()=>downloadXlsx('resume-achievement-food-index-per-site.xlsx', resumeRows)}>Export</button></div>
-      <Table rows={resumeRows} columns={['no','site','site_name','score_food_index','skor_pelaksanaan','leadtime_perbaikan','achievement_site','remark']} empty="Belum ada data resume." />
+      <Table rows={resumeRows} columns={['no','site','site_name','score_food_index','skor_pelaksanaan','leadtime_perbaikan','achievement_site','remark']} empty="Belum ada data resume." captureAll />
     </section>}
 
     <div className={adminCanSeeAll(context) ? 'dashboard-analysis-grid' : 'dashboard-analysis-grid site-role-dashboard-grid'}>
@@ -1973,12 +2140,71 @@ function FoodParameters({ context }){
     </Panel>
   </div>
 }
+const FOOD_IMAGE_MAX_DIMENSION = 1280
+const FOOD_IMAGE_QUALITY = 0.76
+const FOOD_IMAGE_COMPRESS_MIN_SIZE = 350 * 1024
+
+function loadImageForCompression(file){
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const img = new Image()
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      resolve(img)
+    }
+    img.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error('Gagal membaca file foto untuk kompresi.'))
+    }
+    img.src = url
+  })
+}
+
+async function compressFoodImage(file){
+  if (!file || !file.type?.startsWith('image/')) return file
+  if (file.type === 'image/gif' || file.type === 'image/svg+xml') return file
+  if (file.size > 0 && file.size < FOOD_IMAGE_COMPRESS_MIN_SIZE) return file
+
+  try {
+    const img = await loadImageForCompression(file)
+    const originalWidth = img.naturalWidth || img.width
+    const originalHeight = img.naturalHeight || img.height
+    if (!originalWidth || !originalHeight) return file
+
+    const scale = Math.min(1, FOOD_IMAGE_MAX_DIMENSION / Math.max(originalWidth, originalHeight))
+    const width = Math.max(1, Math.round(originalWidth * scale))
+    const height = Math.max(1, Math.round(originalHeight * scale))
+
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return file
+
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, width, height)
+    ctx.drawImage(img, 0, 0, width, height)
+
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', FOOD_IMAGE_QUALITY))
+    if (!blob || blob.size <= 0) return file
+
+    if (file.size && blob.size >= file.size) return file
+    const baseName = (file.name || 'food-photo').replace(/\.[^/.]+$/, '')
+    return new File([blob], `${baseName}-compressed.jpg`, { type:'image/jpeg', lastModified: Date.now() })
+  } catch (err) {
+    console.warn('Food image compression skipped:', err)
+    return file
+  }
+}
+
 async function uploadFoodImage(file, folder='evidence'){
   if (!file) return ''
-  const ext = (file.name?.split('.').pop() || 'jpg').toLowerCase()
+  const shouldCompress = folder !== 'signatures'
+  const uploadFile = shouldCompress ? await compressFoodImage(file) : file
+  const ext = (uploadFile.name?.split('.').pop() || 'jpg').toLowerCase()
   const safeExt = ['jpg','jpeg','png','webp'].includes(ext) ? ext : 'jpg'
   const path = `${folder}/${new Date().toISOString().slice(0,10)}/${crypto.randomUUID()}.${safeExt}`
-  const { error } = await supabase.storage.from('food-index-assets').upload(path, file, { upsert:false, contentType:file.type || 'image/jpeg' })
+  const { error } = await supabase.storage.from('food-index-assets').upload(path, uploadFile, { upsert:false, contentType:uploadFile.type || 'image/jpeg' })
   if (error) throw error
   const { data } = supabase.storage.from('food-index-assets').getPublicUrl(path)
   return data?.publicUrl || ''
@@ -2379,6 +2605,7 @@ function FoodOutstanding({ context, profile }){
   const [msg, setMsg] = useState('')
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [photoPreview, setPhotoPreview] = useState(null)
 
   useEffect(() => { load() }, [context?.id])
 
@@ -2439,6 +2666,17 @@ function FoodOutstanding({ context, profile }){
       preventiveUrl: row.preventive_photo_url || ''
     })
     setMsg(''); setError('')
+  }
+
+  function openOutstandingPhoto(url, title, row){
+    if (!url) return
+    const task = row?.food_weekly_tasks || {}
+    const answer = row?.food_findings?.food_inspection_answers || {}
+    setPhotoPreview({
+      url,
+      title: title || 'Foto Temuan',
+      meta: [task?.sites?.site_code, task?.food_vendors?.vendor_name, answer?.food_parameters?.parameter_text].filter(Boolean).join(' · ')
+    })
   }
 
   async function saveCloseOutstanding(){
@@ -2525,18 +2763,19 @@ function FoodOutstanding({ context, profile }){
     status_task: r.food_weekly_tasks?.status || '-',
     status_outstanding: r.status || '-'
   }))
+  const outstandingExportColumns = ['site','vendor','minggu','parameter','catatan_temuan','corrective_action','preventive_action','due_date','status_task','status_outstanding']
 
   return <div className="stack">
     {msg && <div className="success">{msg}</div>}{error && <div className="error">{error}</div>}
     <Panel title="Outstanding / Temuan Food Index" desc="Isi corrective action, preventive action, dan due date dari temuan inspeksi. Setelah semua temuan pada task terisi, inspeksi masuk approval Atasan Site." action={<button className="secondary" onClick={load} disabled={loading}>{loading ? 'Memuat...' : 'Refresh'}</button>}>
-      {loading ? <p>Memuat outstanding...</p> : <div className="table-wrap" style={{maxHeight:520, overflow:'auto'}}><table><thead><tr><th>Site</th><th>Vendor</th><th>Minggu</th><th>Parameter</th><th>Catatan</th><th>Evidence</th><th>Corrective</th><th>Preventive</th><th>Due Date</th><th>Status Task</th><th>Aksi</th></tr></thead><tbody>{rows.map(r => {
+      {loading ? <p>Memuat outstanding...</p> : <div className="table-wrap outstanding-table-wrap" style={{maxHeight:520, overflow:'auto'}}><table><thead><tr><th>Site</th><th>Vendor</th><th>Minggu</th><th>Parameter</th><th>Catatan</th><th>Evidence</th><th>Corrective</th><th>Preventive</th><th>Due Date</th><th>Status Task</th><th>Aksi</th></tr></thead><tbody>{rows.map(r => {
         const answer = r.food_findings?.food_inspection_answers
         const hasPlan = cleanText(r.food_findings?.corrective_action) && cleanText(r.food_findings?.preventive_action) && cleanText(r.food_findings?.due_date)
-        return <tr key={r.id}><td>{r.food_weekly_tasks?.sites?.site_code || '-'}</td><td>{r.food_weekly_tasks?.food_vendors?.vendor_name || '-'}</td><td>{r.food_weekly_tasks?.week_start_date || '-'}</td><td>{answer?.food_parameters?.parameter_text || '-'}</td><td>{answer?.finding_note || '-'}</td><td>{answer?.evidence_photo_url ? <a href={answer.evidence_photo_url} target="_blank" rel="noreferrer">Lihat foto</a> : '-'}</td><td>{r.food_findings?.corrective_action || '-'}</td><td>{r.food_findings?.preventive_action || '-'}</td><td>{r.food_findings?.due_date || '-'}</td><td className="status-task-cell">{renderCell(r.food_weekly_tasks?.status)}</td><td>{!hasPlan ? <button onClick={()=>openActionPlan(r)}>Isi Tindakan</button> : r.status === 'Closed' ? <StatusPill value="Closed" /> : r.status === 'Waiting Close Approval' ? <StatusPill value="Waiting Close Approval" /> : <button onClick={()=>openCloseOutstanding(r)}>Close Outstanding</button>}</td></tr>
+        return <tr key={r.id}><td>{r.food_weekly_tasks?.sites?.site_code || '-'}</td><td>{r.food_weekly_tasks?.food_vendors?.vendor_name || '-'}</td><td>{r.food_weekly_tasks?.week_start_date || '-'}</td><td>{answer?.food_parameters?.parameter_text || '-'}</td><td>{answer?.finding_note || '-'}</td><td>{answer?.evidence_photo_url ? <button type="button" className="photo-view-btn" onClick={()=>openOutstandingPhoto(answer.evidence_photo_url, 'Foto Evidence', r)}><ImageIcon size={14}/> View</button> : '-'}</td><td>{r.food_findings?.corrective_action || '-'}</td><td>{r.food_findings?.preventive_action || '-'}</td><td>{r.food_findings?.due_date || '-'}</td><td className="status-task-cell"><TaskStatusPill value={r.food_weekly_tasks?.status} /></td><td>{!hasPlan ? <button onClick={()=>openActionPlan(r)}>Isi Tindakan</button> : r.status === 'Closed' ? <StatusPill value="Closed" /> : r.status === 'Waiting Close Approval' ? <StatusPill value="Waiting Close Approval" /> : <button onClick={()=>openCloseOutstanding(r)}>Close Outstanding</button>}</td></tr>
       })}</tbody></table>{!rows.length && <p className="muted table-empty">Belum ada outstanding / temuan.</p>}</div>}
     </Panel>
     <Panel title="Export Outstanding" action={<button onClick={()=>downloadXlsx('food-index-outstanding.xlsx', tableRows)}><Download size={16}/> Export</button>}>
-      <Table rows={tableRows} empty="Belum ada data outstanding." />
+      <div className="outstanding-export-table"><Table rows={tableRows} columns={outstandingExportColumns} empty="Belum ada data outstanding." /></div>
     </Panel>
     {active && <div className="modal-backdrop"><div className="modal-card">
       <div className="modal-head"><div><h3>Isi Action Plan Temuan</h3><p>{active.food_weekly_tasks?.sites?.site_code} · {active.food_weekly_tasks?.food_vendors?.vendor_name}</p></div><button className="icon" onClick={()=>setActive(null)}><X size={18}/></button></div>
@@ -2553,12 +2792,13 @@ function FoodOutstanding({ context, profile }){
       <div className="stack compact">
         <div className="info-note"><b>Action Plan:</b><br/>Corrective: {closeActive.food_findings?.corrective_action || '-'}<br/>Preventive: {closeActive.food_findings?.preventive_action || '-'}<br/>Due Date: {closeActive.food_findings?.due_date || '-'}</div>
         <label className="upload-line"><Upload size={18}/><span>{closeForm.correctiveFile?.name || (closeForm.correctiveUrl ? 'Foto corrective sudah ada' : 'Upload Foto Corrective')}</span><input type="file" accept="image/*" hidden onChange={e=>setCloseForm({...closeForm, correctiveFile:e.target.files?.[0] || null})}/></label>
-        {closeForm.correctiveUrl && <a href={closeForm.correctiveUrl} target="_blank" rel="noreferrer">Lihat foto corrective tersimpan</a>}
+        {closeForm.correctiveUrl && <button type="button" className="photo-view-btn inline-photo-view-btn" onClick={()=>openOutstandingPhoto(closeForm.correctiveUrl, 'Foto Corrective Tersimpan', closeActive)}><ImageIcon size={14}/> View foto corrective tersimpan</button>}
         <label className="upload-line"><Upload size={18}/><span>{closeForm.preventiveFile?.name || (closeForm.preventiveUrl ? 'Foto preventive sudah ada' : 'Upload Foto Preventive')}</span><input type="file" accept="image/*" hidden onChange={e=>setCloseForm({...closeForm, preventiveFile:e.target.files?.[0] || null})}/></label>
-        {closeForm.preventiveUrl && <a href={closeForm.preventiveUrl} target="_blank" rel="noreferrer">Lihat foto preventive tersimpan</a>}
+        {closeForm.preventiveUrl && <button type="button" className="photo-view-btn inline-photo-view-btn" onClick={()=>openOutstandingPhoto(closeForm.preventiveUrl, 'Foto Preventive Tersimpan', closeActive)}><ImageIcon size={14}/> View foto preventive tersimpan</button>}
       </div>
       <div className="modal-actions"><button className="secondary" onClick={()=>setCloseActive(null)} disabled={saving}>Batal</button><button onClick={saveCloseOutstanding} disabled={saving}>{saving ? 'Menyimpan...' : 'Submit Close ke Approval'}</button></div>
     </div></div>}
+    {photoPreview && <FoodPhotoModal photo={photoPreview} onClose={()=>setPhotoPreview(null)} />}
   </div>
 }
 function FoodApproval({ context, profile }){
@@ -2817,6 +3057,7 @@ function FoodReport({ context }){
   const [loading, setLoading] = useState(true)
   const [rows, setRows] = useState([])
   const [error, setError] = useState('')
+  const [photoPreview, setPhotoPreview] = useState(null)
 
   useEffect(() => { load() }, [context?.id])
 
@@ -2883,6 +3124,17 @@ function FoodReport({ context }){
   const totalClosed = rows.filter(r => r.status === 'Closed').length
   const dueSoon = rows.filter(r => r.status !== 'Closed' && r.food_findings?.due_date && r.food_findings.due_date <= today()).length
 
+  function openReportPhoto(url, title, r){
+    if (!url) return
+    const task = r?.food_weekly_tasks || {}
+    const answer = r?.food_findings?.food_inspection_answers || {}
+    setPhotoPreview({
+      url,
+      title: title || 'Foto Temuan',
+      meta: [task?.sites?.site_code, task?.food_vendors?.vendor_name, answer?.food_parameters?.parameter_text].filter(Boolean).join(' · ')
+    })
+  }
+
   return <div className="stack">
     {error && <div className="error">{error}</div>}
     <div className="kpi-grid three">
@@ -2909,8 +3161,8 @@ function FoodReport({ context }){
                 <td>{r.food_findings?.corrective_action || '-'}</td>
                 <td>{r.food_findings?.preventive_action || '-'}</td>
                 <td>{r.food_findings?.due_date || '-'}</td>
-                <td>{r.corrective_photo_url ? <a href={r.corrective_photo_url} target="_blank" rel="noreferrer">Lihat foto</a> : '-'}</td>
-                <td>{r.preventive_photo_url ? <a href={r.preventive_photo_url} target="_blank" rel="noreferrer">Lihat foto</a> : '-'}</td>
+                <td>{r.corrective_photo_url ? <button type="button" className="photo-view-btn" onClick={()=>openReportPhoto(r.corrective_photo_url, 'Foto Corrective', r)}><ImageIcon size={14}/> View</button> : '-'}</td>
+                <td>{r.preventive_photo_url ? <button type="button" className="photo-view-btn" onClick={()=>openReportPhoto(r.preventive_photo_url, 'Foto Preventive', r)}><ImageIcon size={14}/> View</button> : '-'}</td>
                 <td><StatusPill value={r.status === 'Closed' ? 'Close' : 'Open'} /></td>
               </tr>
             })}</tbody>
@@ -2919,6 +3171,27 @@ function FoodReport({ context }){
         </div>
       </div>}
     </Panel>
+    {photoPreview && <FoodPhotoModal photo={photoPreview} onClose={()=>setPhotoPreview(null)} />}
+  </div>
+}
+
+function FoodPhotoModal({ photo, onClose }){
+  const [failed, setFailed] = useState(false)
+  if (!photo?.url) return null
+  return <div className="modal-backdrop food-modal-backdrop photo-view-backdrop" role="dialog" aria-modal="true" onClick={onClose}>
+    <div className="modal-card photo-view-modal" onClick={e=>e.stopPropagation()}>
+      <div className="modal-head photo-view-head">
+        <div>
+          <h3>{photo.title || 'Preview Foto'}</h3>
+          <p>{photo.meta || 'Preview foto dari report Food Index'}</p>
+        </div>
+        <button className="icon" onClick={onClose} aria-label="Tutup preview foto"><X size={18}/></button>
+      </div>
+      <div className="photo-view-body">
+        {failed ? <div className="photo-view-failed"><AlertTriangle size={22}/><b>Foto gagal dimuat</b><span>Pastikan file masih tersedia di Supabase Storage.</span></div> : <img src={photo.url} alt={photo.title || 'Foto Food Index'} onError={()=>setFailed(true)} />}
+      </div>
+      <div className="photo-view-actions"><button className="secondary" onClick={onClose}>Tutup</button></div>
+    </div>
   </div>
 }
 function Placeholder({ title, desc }){
