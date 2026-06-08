@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from './lib/supabase'
+import fissLogo from './assets/fiss-logo.png'
 import {
   AlertTriangle, BarChart3, Building2, CalendarCheck, CheckCircle2, ClipboardCheck,
   Download, FileSpreadsheet, LayoutDashboard, LogOut, Menu, Search, ShieldCheck,
@@ -115,8 +116,10 @@ export default function FoodIndexApp({ embeddedProfile, embeddedContext, embedde
     <aside className={sidebar ? 'sidebar open' : 'sidebar'}>
       <button className="sidebar-close" onClick={()=>setSidebar(false)}>×</button>
       <div className="brand dark sidebar-brand">
-        <div className="logo">🍽️</div>
-        <div><b>Food Index</b><span>{context?.role} · {contextSiteName(context)}</span></div>
+        <div className="logo fiss-custom-logo" aria-label="FISS logo">
+          <img src={fissLogo} alt="FISS Logo" className="fiss-custom-logo-img" />
+        </div>
+        <div><b>FISS</b><span>Food index inspection system</span></div>
       </div>
       <nav>{menu.map(([key,label,Icon]) => <button key={key} className={page===key?'active':''} onClick={()=>{setPage(key); setSidebar(false)}}><Icon size={18}/>{label}</button>)}</nav>
       <div className="sidebar-info-cards">
@@ -709,6 +712,26 @@ function FoodIndexScopedStyles(){
       height: 52px !important;
       border-radius: 18px !important;
       font-size: 24px !important;
+    }
+    .food-index-app .sidebar .fiss-custom-logo {
+      position: relative !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      overflow: hidden !important;
+      background: #ffffff !important;
+      border: 1px solid rgba(255,255,255,.78) !important;
+      box-shadow:
+        0 14px 30px rgba(0,0,0,.16),
+        inset 0 0 0 1px rgba(15,23,42,.04) !important;
+    }
+    .food-index-app .fiss-custom-logo-img {
+      width: 48px !important;
+      height: 48px !important;
+      display: block !important;
+      object-fit: contain !important;
+      object-position: center !important;
+      transform: scale(1.16);
     }
     .food-index-app .sidebar .brand b {
       display: block !important;
