@@ -15,6 +15,9 @@ const FOOD_ACCESS_ROLES = ['Administrator', 'GL', 'Section Head', 'Dept Head']
 // Role enum app_role yang benar-benar valid di database. Jangan kirim role UI langsung ke kolom role.
 const FOOD_DB_ACCESS_ROLES = ['Platform Admin', 'App Admin', 'GL', 'Atasan Site']
 const FOOD_ROLE_TARGETS = { GL: 4, 'Section Head': 2, 'Dept Head': 1 }
+// Site berikut disembunyikan dari semua perhitungan dan tabel Dashboard Food Index.
+// Site tetap ada di master/admin untuk kebutuhan akses Head Office, tetapi tidak masuk achievement operasional.
+const FOOD_DASHBOARD_HIDDEN_SITE_CODES = ['JIEP']
 function canAdmin(role){ return ADMIN_ROLES.includes(role) }
 function canApprove(role){ return ADMIN_ROLES.includes(role) || ATASAN_ROLES.includes(role) }
 function canInspect(role){ return ADMIN_ROLES.includes(role) || GL_ROLES.includes(role) || ATASAN_ROLES.includes(role) }
@@ -58,6 +61,12 @@ function getVal(row, keys){
 function contextSiteName(context){ return context?.sites?.site_name || context?.sites?.site_code || 'All Site' }
 function isGlobalView(context){ return canAdmin(context?.role) && !context?.site_id }
 function adminCanSeeAll(context){ return canAdmin(context?.role) }
+function isFoodDashboardHiddenSiteCode(siteCode){
+  return FOOD_DASHBOARD_HIDDEN_SITE_CODES.includes(String(siteCode || '').trim().toUpperCase())
+}
+function isFoodDashboardVisibleSite(site){
+  return !isFoodDashboardHiddenSiteCode(site?.site_code)
+}
 
 const MENUS = [
   ['dashboard', 'Dashboard', LayoutDashboard],
@@ -304,6 +313,7 @@ function FoodIndexScopedStyles(){
     .food-index-app h2, .food-index-app h3, .food-index-app b, .food-index-app strong { letter-spacing: -0.02em; }
     .food-index-app h2 { font-weight: 700; }
     .food-index-app h3 { font-weight: 700; }
+    .food-index-app .period-note { margin-top: 6px; font-size: 13px; font-weight: 700; color: #2563eb; }
     .food-index-app button { font-weight: 600; }
     .food-index-app input, .food-index-app select, .food-index-app textarea { font-family: Arial, Helvetica, sans-serif !important; font-weight: 500; }
     .food-index-app .panel, .food-index-app .kpi, .food-index-app .modal-card { border-radius: 22px; }
@@ -459,6 +469,11 @@ function FoodIndexScopedStyles(){
     .food-index-app .status-pill.ok { background:#dcfce7; color:#166534; }
     .food-index-app .status-pill.warn { background:#fef3c7; color:#92400e; }
     .food-index-app .status-pill.bad { background:#fee2e2; color:#991b1b; }
+    .food-index-app td.remark-cell { font-weight:700; text-align:center; vertical-align:middle !important; box-shadow: inset 0 1px 0 rgba(255,255,255,.65); }
+    .food-index-app td.remark-cell-success { background:#dcfce7 !important; color:#166534 !important; border-left:4px solid #22c55e; }
+    .food-index-app td.remark-cell-danger { background:#fee2e2 !important; color:#991b1b !important; border-left:4px solid #ef4444; }
+    .food-index-app td.remark-cell-warning { background:#fef3c7 !important; color:#92400e !important; border-left:4px solid #f59e0b; }
+    .food-index-app td.remark-cell-neutral { background:#f8fafc !important; color:#475569 !important; border-left:4px solid #94a3b8; }
     .food-index-app .report-table-wrap table { min-width: 1480px; }
     .food-index-app .modal-card { box-shadow: 0 34px 90px rgba(15,23,42,.24); border:1px solid rgba(219,234,254,.95); }
     .food-index-app .modal-head { background: linear-gradient(180deg, #ffffff, #f8fbff); }
@@ -1187,8 +1202,6 @@ function FoodIndexScopedStyles(){
     .food-index-app .upload-actions { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:14px; }
     .food-index-app .upload-tile { display:inline-flex; align-items:center; gap:10px; border:1px dashed #93c5fd; background:#eff6ff; color:#1d4ed8; padding:16px 18px; border-radius:18px; cursor:pointer; font-weight:800; }
     .food-index-app .role-participation-card { margin-top: 0; }
-    .food-index-app .role-alert-stack { display:grid; gap:10px; margin: 8px 0 16px; }
-    .food-index-app .role-alert { display:flex; align-items:flex-start; gap:10px; padding:12px 14px; border:1px solid #fed7aa; background:#fff7ed; color:#9a3412; border-radius:16px; font-weight:700; line-height:1.35; }
     .food-index-app .signature-live-search { grid-template-columns: 1fr 70px !important; }
     .food-index-app .signature-live-search > button[disabled] { opacity:.55; cursor:not-allowed; }
     .food-index-app .readonly-signature-grid input[readonly] { background:#f8fbff; color:#334155; }
@@ -1305,11 +1318,22 @@ function Table({ rows, columns, empty='Belum ada data.', captureAll=false }){
   const wrapStyle = captureAll ? { maxHeight: 'none', overflow: 'visible' } : { maxHeight: 420, overflow: 'auto' }
   return <div className={captureAll ? 'capture-table-root' : ''}>
     <div className="table-toolbar"><div className="searchbox"><Search size={18}/><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search row data..." /></div></div>
-    <div className={captureAll ? 'table-wrap capture-all-wrap' : 'table-wrap'} style={wrapStyle}><table><thead><tr>{cols.map(c => <th key={c}>{c}</th>)}</tr></thead><tbody>{filtered.map((r,i)=><tr key={r.id || i}>{cols.map(c => <td key={c}>{renderCell(r[c])}</td>)}</tr>)}</tbody></table>{!filtered.length && <p className="muted table-empty">{empty}</p>}</div>
+    <div className={captureAll ? 'table-wrap capture-all-wrap' : 'table-wrap'} style={wrapStyle}><table><thead><tr>{cols.map(c => <th key={c}>{c}</th>)}</tr></thead><tbody>{filtered.map((r,i)=><tr key={r.id || i}>{cols.map(c => <td key={c} className={tableCellClass(c, r[c])}>{renderCell(r[c], c)}</td>)}</tr>)}</tbody></table>{!filtered.length && <p className="muted table-empty">{empty}</p>}</div>
   </div>
 }
-function renderCell(v){
+function tableCellClass(column, value){
+  const key = String(column || '').toLowerCase()
+  const val = String(value || '').trim().toLowerCase()
+  if (key !== 'remark') return ''
+  if (val === 'tercapai') return 'remark-cell remark-cell-success'
+  if (val === 'tidak tercapai' || val === 'belum tercapai') return 'remark-cell remark-cell-danger'
+  if (val === 'not yet approved') return 'remark-cell remark-cell-warning'
+  if (val === 'are not done') return 'remark-cell remark-cell-danger'
+  return 'remark-cell remark-cell-neutral'
+}
+function renderCell(v, column){
   if (v === null || v === undefined || v === '') return '-'
+  if (String(column || '').toLowerCase() === 'remark') return String(v)
   if (['Open','In Progress','Need Action Plan','Waiting Approval','Approved','Expired','Rejected','Closed','Aktif','Nonaktif'].includes(String(v))) return <StatusPill value={v} />
   return String(v)
 }
@@ -1368,6 +1392,65 @@ function sameMonth(dateText, year, month){
   if (!dateText) return false
   const [y,m] = String(dateText).split('-')
   return (year === 'ALL' || y === String(year)) && (month === 'ALL' || m === String(month).padStart(2,'0'))
+}
+function sameDashboardPeriodByDate(dateText, year, month, week='ALL'){
+  const date = String(dateText || '').slice(0,10)
+  if (!date) return false
+  const weekStart = startOfWeekMonday(new Date(date))
+  if (week !== 'ALL') return weekStart === week
+  const [y,m] = date.split('-')
+  return (year === 'ALL' || y === String(year)) && (month === 'ALL' || m === String(month).padStart(2,'0'))
+}
+function outstandingCreatedWeekStart(row){
+  // Dashboard leadtime mengikuti minggu task inspeksi yang melahirkan outstanding,
+  // bukan due date, close date, atau timestamp upload/action plan.
+  const taskWeek = row?.food_findings?.food_weekly_tasks?.week_start_date || ''
+  if (taskWeek) return taskWeek
+  const createdDate = String(row?.created_at || '').slice(0,10)
+  return createdDate ? startOfWeekMonday(new Date(createdDate)) : ''
+}
+function outstandingMatchesDashboardPeriod(row, year, month, week='ALL'){
+  const outstandingWeekStart = outstandingCreatedWeekStart(row)
+  if (!outstandingWeekStart) return false
+  if (week !== 'ALL') return outstandingWeekStart === week
+  return sameMonth(outstandingWeekStart, year, month)
+}
+function pctValue(n, d){ return d ? (Number(n || 0) / Number(d || 0)) * 100 : 0 }
+function fmtPct(value){
+  const n = Number(value || 0)
+  return `${Number.isFinite(n) ? n.toFixed(2) : '0.00'}%`
+}
+function taskIsApproved(task){ return String(task?.status || '') === 'Approved' }
+function taskHasInspectionData(task){
+  const answers = task?.food_inspection_answers || []
+  return Boolean(task?.submitted_at || task?.approved_at || answers.length || ['Approved','Expired','Waiting Approval','Need Action Plan'].includes(String(task?.status || '')))
+}
+function achievementRemark(score, task){
+  if (task && !taskIsApproved(task)) return 'Not Yet Approved'
+  return Number(score || 0) >= 95 ? 'Tercapai' : 'Tidak tercapai'
+}
+function taskWeekIsExpired(task){
+  const end = String(task?.week_end_date || '').slice(0,10)
+  return Boolean(end && end < today())
+}
+function taskHasActualInspectionWork(task){
+  const answers = task?.food_inspection_answers || []
+  return Boolean(task?.submitted_at || task?.approved_at || answers.length)
+}
+function scoreInspectionDisplay(task, score){
+  const hasWork = taskHasActualInspectionWork(task)
+  const expiredByStatusOrDate = String(task?.status || '') === 'Expired' || taskWeekIsExpired(task)
+
+  // Khusus tabel Score Food Index per Inspeksi:
+  // - sudah inspeksi tetapi belum approved: tampil sebagai Open + Not Yet Approved
+  // - belum dilakukan sampai lewat minggu: tampil sebagai Expired + Are Not Done
+  if (hasWork && !taskIsApproved(task)) return { status: 'Open', remark: 'Not Yet Approved' }
+  if (!hasWork && expiredByStatusOrDate) return { status: 'Expired', remark: 'Are Not Done' }
+  if (!hasWork) return { status: String(task?.status || 'Open') || 'Open', remark: 'Are Not Done' }
+  return {
+    status: String(task?.status || '-') || '-',
+    remark: Number(score || 0) >= 95 ? 'Tercapai' : 'Tidak tercapai'
+  }
 }
 
 
@@ -1560,6 +1643,8 @@ function FoodDashboard({ context }){
   const weekLabel = weekFilter === 'ALL' ? 'All Week' : `${weekFilter} s/d ${weekEnd}`
   const monthLabel = monthFilter === 'ALL' ? 'All Month' : monthFilter
   const yearLabel = yearFilter === 'ALL' ? 'All Year' : yearFilter
+  const selectedSiteLabel = siteFilter ? sites.find(s => s.id === siteFilter)?.site_code || 'Site terpilih' : 'All Site'
+  const dashboardPeriodLabel = `Periode data: ${weekLabel} | Bulan: ${monthLabel} | Tahun: ${yearLabel} | Site: ${selectedSiteLabel}`
   const thursdayAlert = new Date().getDay() >= 4 || new Date().getDay() === 0
 
   useEffect(() => { load() }, [context?.id, siteFilter, weekFilter, monthFilter, yearFilter])
@@ -1567,7 +1652,16 @@ function FoodDashboard({ context }){
   async function load(){
     setLoading(true); setError('')
     try {
-      if (adminCanSeeAll(context)) setSites(await fetchSites())
+      let allDashboardSites = []
+      let visibleDashboardSites = []
+      let hiddenDashboardSiteIds = new Set()
+      if (adminCanSeeAll(context)) {
+        allDashboardSites = await fetchSites()
+        visibleDashboardSites = allDashboardSites.filter(isFoodDashboardVisibleSite)
+        hiddenDashboardSiteIds = new Set(allDashboardSites.filter(s => !isFoodDashboardVisibleSite(s)).map(s => s.id))
+        setSites(visibleDashboardSites)
+        if (siteFilter && !visibleDashboardSites.some(s => s.id === siteFilter)) setSiteFilter('')
+      }
       let monthStart = null
       let monthEndDate = null
       if (yearFilter !== 'ALL' && monthFilter !== 'ALL') {
@@ -1590,7 +1684,7 @@ function FoodDashboard({ context }){
       if (monthStart && monthEndDate) tq = tq.gte('week_start_date', monthStart).lte('week_start_date', monthEndDate)
       let oq = supabase
         .from('food_outstandings')
-        .select('*, food_findings(corrective_action, preventive_action, due_date, food_inspection_answers(finding_note, evidence_photo_url, food_parameters(parameter_text)), food_weekly_tasks(week_start_date, submitted_at, approved_at, sites(site_code,site_name), food_vendors(vendor_name)))')
+        .select('*, food_findings(corrective_action, preventive_action, due_date, food_inspection_answers(finding_note, evidence_photo_url, food_parameters(parameter_text)), food_weekly_tasks(id, site_id, week_start_date, week_end_date, submitted_at, approved_at, status, sites(site_code,site_name), food_vendors(vendor_name)))')
         .order('created_at', { ascending:false })
         .limit(1000)
       let vq = supabase.from('food_vendors').select('id, site_id, vendor_name, status').eq('status','Aktif')
@@ -1611,22 +1705,41 @@ function FoodDashboard({ context }){
       if (pe) throw pe
       if (oe && adminCanSeeAll(context)) throw oe
       if (se && !String(se.message || '').includes('food_inspection_signatures')) throw se
-      setTasks(t || [])
-      setOuts(adminCanSeeAll(context) ? (o || []) : [])
-      setVendors(v || [])
+      const hideDashboardSite = (siteId, siteCode) => hiddenDashboardSiteIds.has(siteId) || isFoodDashboardHiddenSiteCode(siteCode)
+      const dashboardTasks = (t || []).filter(row => !hideDashboardSite(row.site_id, row.sites?.site_code))
+      const dashboardOuts = (o || []).filter(row => {
+        const task = row.food_findings?.food_weekly_tasks || {}
+        if (hideDashboardSite(task.site_id, task.sites?.site_code)) return false
+        if (adminCanSeeAll(context) && siteFilter && task.site_id !== siteFilter) return false
+        return outstandingMatchesDashboardPeriod(row, yearFilter, monthFilter, weekFilter)
+      })
+      const dashboardVendors = (v || []).filter(row => !hideDashboardSite(row.site_id, ''))
+      const dashboardSignatures = (sigs || []).filter(row => {
+        const task = row.food_weekly_tasks || {}
+        return !hideDashboardSite(row.site_id || task.site_id, task.sites?.site_code)
+      })
+      setTasks(dashboardTasks)
+      setOuts(adminCanSeeAll(context) ? dashboardOuts : [])
+      setVendors(dashboardVendors)
       setParameters(p || [])
-      setSignatureRows(sigs || [])
+      setSignatureRows(dashboardSignatures)
     } catch(e){ setError(e.message) }
     setLoading(false)
   }
 
-  const weekTasks = weekFilter === 'ALL' ? tasks : tasks.filter(t => t.week_start_date === weekFilter)
+  const filteredTasks = weekFilter === 'ALL' ? tasks : tasks.filter(t => t.week_start_date === weekFilter)
+  const filteredOuts = outs.filter(o => outstandingMatchesDashboardPeriod(o, yearFilter, monthFilter, weekFilter))
+  const filteredSignatureRows = weekFilter === 'ALL' ? signatureRows : signatureRows.filter(sig => {
+    const task = sig.food_weekly_tasks || {}
+    return task.week_start_date === weekFilter
+  })
+  const weekTasks = filteredTasks
   const total = weekTasks.length
   const approved = weekTasks.filter(t => t.status === 'Approved').length
   const expired = weekTasks.filter(t => t.status === 'Expired').length
-  const achievement = total ? Math.round((approved / total) * 100) : 0
+  const achievement = pctValue(approved, total)
   const alertRows = weekTasks.filter(t => thursdayAlert && ['Open','In Progress','Need Action Plan'].includes(t.status))
-  const reportRows = outs.slice(0, 8).map((o, idx) => {
+  const reportRows = filteredOuts.slice(0, 8).map((o, idx) => {
     const f = o.food_findings || {}
     const answer = f.food_inspection_answers || {}
     const task = f.food_weekly_tasks || {}
@@ -1644,37 +1757,45 @@ function FoodDashboard({ context }){
     }
   })
 
-  const scoreRows = tasks.filter(t => t.submitted_at || t.approved_at || t.status === 'Approved').map((t, idx) => {
-    const answers = t.food_inspection_answers || []
-    const totalParam = answers.length || parameters.length || 0
-    const ok = answers.filter(a => Number(a.score) === 1).length
-    const score = totalParam ? Math.round((ok / totalParam) * 100) : 0
-    return {
-      no: idx + 1,
-      site: t.sites?.site_code || '-',
-      vendor: t.food_vendors?.vendor_name || '-',
-      minggu: `${t.week_start_date} s/d ${t.week_end_date}`,
-      parameter: totalParam,
-      sesuai: ok,
-      temuan: answers.filter(a => Number(a.score) === 0).length,
-      score: `${score}%`,
-      remark: score >= 95 ? 'Tercapai' : 'Tidak tercapai',
-      status: t.status
-    }
-  })
-  const vendorCount = vendors.length
-  const inspectedVendorIds = new Set(tasks.filter(t => ['Waiting Approval','Approved','Need Action Plan'].includes(t.status) || t.submitted_at).map(t => t.vendor_id))
-  const executionScore = vendorCount ? Math.round((inspectedVendorIds.size / vendorCount) * 100) : 0
+  const scoreRows = filteredTasks
+    .filter(t => taskHasActualInspectionWork(t) || ['Approved','Expired','Waiting Approval','Need Action Plan'].includes(String(t.status || '')))
+    .map((t, idx) => {
+      const answers = t.food_inspection_answers || []
+      const totalParam = answers.length || parameters.length || 0
+      const ok = answers.filter(a => Number(a.score) === 1).length
+      const score = pctValue(ok, totalParam)
+      const display = scoreInspectionDisplay(t, score)
+      return {
+        no: idx + 1,
+        site: t.sites?.site_code || '-',
+        vendor: t.food_vendors?.vendor_name || '-',
+        minggu: `${t.week_start_date} s/d ${t.week_end_date}`,
+        parameter: totalParam,
+        sesuai: ok,
+        temuan: answers.filter(a => Number(a.score) === 0).length,
+        score: fmtPct(score),
+        remark: display.remark,
+        status: display.status
+      }
+    })
+  const executionScopeTasks = filteredTasks
+  const executionTotal = executionScopeTasks.length || (weekFilter !== 'ALL' ? vendors.length : 0)
+  const inspectedExecutionTasks = executionScopeTasks.filter(taskHasActualInspectionWork)
+  const executionDone = inspectedExecutionTasks.length
+  const notInspectedVendorCount = Math.max(executionTotal - executionDone, 0)
+  const executionScore = pctValue(executionDone, executionTotal)
   const executionRows = [{
-    periode: `${monthLabel}-${yearLabel}`,
+    periode: `${weekLabel} | ${monthLabel}-${yearLabel}`,
     bulan: monthLabel,
-    site: siteFilter ? sites.find(s => s.id === siteFilter)?.site_code || 'Site terpilih' : adminCanSeeAll(context) ? 'All Site' : contextSiteName(context),
-    total_vendor_aktif: vendorCount,
-    vendor_sudah_inspeksi: inspectedVendorIds.size,
-    skor_pelaksanaan: `${executionScore}%`,
+    week: weekLabel,
+    site: siteFilter ? selectedSiteLabel : adminCanSeeAll(context) ? 'All Site' : contextSiteName(context),
+    total_vendor_aktif: executionTotal,
+    vendor_sudah_inspeksi: executionDone,
+    vendor_belum_inspeksi: notInspectedVendorCount,
+    skor_pelaksanaan: fmtPct(executionScore),
     remark: executionScore >= 100 ? 'Tercapai' : 'Tidak tercapai'
   }]
-  const leadtimeRows = outs.filter(o => o.food_findings?.due_date).map((o, idx) => {
+  const leadtimeRows = filteredOuts.filter(o => o.food_findings?.due_date).map((o, idx) => {
     const f = o.food_findings || {}
     const task = f.food_weekly_tasks || {}
     const closedDate = o.closed_at?.slice(0,10) || ''
@@ -1685,6 +1806,7 @@ function FoodDashboard({ context }){
       site: task.sites?.site_code || '-',
       vendor: task.food_vendors?.vendor_name || '-',
       parameter: f.food_inspection_answers?.food_parameters?.parameter_text || '-',
+      minggu_outstanding: outstandingCreatedWeekStart(o) || task.week_start_date || '-',
       due_date: due || '-',
       tanggal_close: closedDate || '-',
       status: o.status === 'Closed' ? 'Closed' : 'Open',
@@ -1692,12 +1814,13 @@ function FoodDashboard({ context }){
     }
   })
 
-  function pct(n, d){ return d ? Math.round((n / d) * 100) : 0 }
+  function pct(n, d){ return pctValue(n, d) }
+  // sites state pada dashboard admin sudah disaring agar Head Office/JIEP tidak tampil di resume dan achievement operasional.
   const siteSource = adminCanSeeAll(context) ? sites : [{ id: context?.site_id, site_code: contextSiteName(context), site_name: contextSiteName(context) }]
   const roleParticipationRows = siteSource
     .filter(s => !siteFilter || s.id === siteFilter)
     .map((s, idx) => {
-      const siteSignatures = signatureRows.filter(sig => {
+      const siteSignatures = filteredSignatureRows.filter(sig => {
         const task = sig.food_weekly_tasks || {}
         return task.site_id === s.id && sameMonth(task.week_start_date, yearFilter, monthFilter)
       })
@@ -1716,30 +1839,28 @@ function FoodDashboard({ context }){
         remark: remarks.join(' | ')
       }
     })
-  const roleParticipationAlerts = roleParticipationRows.filter(r => r.status !== 'Tercapai')
-
   const resumeRows = siteSource
     .filter(s => !siteFilter || s.id === siteFilter)
     .map((s, idx) => {
-      const siteTasks = tasks.filter(t => t.site_id === s.id)
-      const siteAnswers = siteTasks.flatMap(t => t.food_inspection_answers || [])
+      const siteTasks = filteredTasks.filter(t => t.site_id === s.id)
+      const inspectedSiteTasks = siteTasks.filter(taskHasActualInspectionWork)
+      const siteAnswers = inspectedSiteTasks.flatMap(t => t.food_inspection_answers || [])
       const siteOkAnswers = siteAnswers.filter(a => Number(a.score) === 1).length
       const scoreFoodIndex = pct(siteOkAnswers, siteAnswers.length)
-      const siteVendorIds = new Set(vendors.filter(v => v.site_id === s.id).map(v => v.id))
-      const inspectedSiteVendorIds = new Set(siteTasks.filter(t => ['Waiting Approval','Approved','Need Action Plan'].includes(t.status) || t.submitted_at).map(t => t.vendor_id).filter(Boolean))
-      const skorPelaksanaan = pct(inspectedSiteVendorIds.size, siteVendorIds.size)
+      const siteExecutionTotal = siteTasks.length || (weekFilter !== 'ALL' ? vendors.filter(v => v.site_id === s.id).length : 0)
+      const skorPelaksanaan = pct(inspectedSiteTasks.length, siteExecutionTotal)
       const siteLeadtime = leadtimeRows.filter(r => r.site === s.site_code)
       const leadtimeScore = siteLeadtime.length ? pct(siteLeadtime.filter(r => r.remark === 'Tercapai').length, siteLeadtime.length) : 0
       const available = [scoreFoodIndex, skorPelaksanaan, ...(siteLeadtime.length ? [leadtimeScore] : [])]
-      const achievement = available.length ? Math.round(available.reduce((a,b)=>a+b,0) / available.length) : 0
+      const achievement = available.length ? available.reduce((a,b)=>a+b,0) / available.length : 0
       return {
         no: idx + 1,
         site: s.site_code || '-',
         site_name: s.site_name || '-',
-        score_food_index: `${scoreFoodIndex}%`,
-        skor_pelaksanaan: `${skorPelaksanaan}%`,
-        leadtime_perbaikan: siteLeadtime.length ? `${leadtimeScore}%` : '-',
-        achievement_site: `${achievement}%`,
+        score_food_index: fmtPct(scoreFoodIndex),
+        skor_pelaksanaan: fmtPct(skorPelaksanaan),
+        leadtime_perbaikan: siteLeadtime.length ? fmtPct(leadtimeScore) : '-',
+        achievement_site: fmtPct(achievement),
         remark: achievement >= 95 ? 'Tercapai' : 'Tidak tercapai'
       }
     })
@@ -1777,19 +1898,18 @@ function FoodDashboard({ context }){
 
     <div className="dashboard-kpi-grid">
       <div className="dash-kpi"><small>Task Minggu Ini</small><strong>{total}</strong><span>↗ {sites.length || 1} site aktif</span></div>
-      <div className="dash-kpi"><small>Approved</small><strong>{approved}</strong><span>Achievement {achievement}%</span></div>
-      <div className="dash-kpi"><small>Outstanding Open</small><strong>{outs.filter(o => o.status !== 'Closed').length}</strong><span className="orange">Butuh follow up</span></div>
+      <div className="dash-kpi"><small>Approved</small><strong>{approved}</strong><span>Achievement {fmtPct(achievement)}</span></div>
+      <div className="dash-kpi"><small>Outstanding Open</small><strong>{filteredOuts.filter(o => o.status !== 'Closed').length}</strong><span className="orange">Butuh follow up</span></div>
       <div className="dash-kpi"><small>Expired</small><strong>{expired}</strong><span className="red">Impact achievement</span></div>
     </div>
 
     {adminCanSeeAll(context) && <section className="dashboard-card analysis-table compact-card role-participation-card">
       <div className="dashboard-card-head"><div><h3>Partisipasi Inspeksi per Role</h3><p>Target per site per bulan dihitung dari user yang ikut tanda tangan inspeksi: GL 4x, Section Head 2x, Dept Head 1x.</p></div><button onClick={()=>downloadXlsx('partisipasi-role-food-index.xlsx', roleParticipationRows)}>Export</button></div>
-      {!!roleParticipationAlerts.length && <div className="role-alert-stack">{roleParticipationAlerts.slice(0,6).map(r => <div className="role-alert" key={r.site}><AlertTriangle size={16}/><span>{r.site}: {r.remark}</span></div>)}</div>}
       <Table rows={roleParticipationRows} columns={['no','site','site_name','gl','section_head','dept_head','status','remark']} empty="Belum ada data tanda tangan pada filter ini." />
     </section>}
 
     {adminCanSeeAll(context) && <section className="dashboard-card analysis-table resume-table compact-card">
-      <div className="dashboard-card-head"><div><h3>Resume Achievement per Site</h3><p>Ringkasan 3 dashboard utama per site: Score Food Index, Skor Pelaksanaan Inspeksi, dan Leadtime Perbaikan.</p></div><button onClick={()=>downloadXlsx('resume-achievement-food-index-per-site.xlsx', resumeRows)}>Export</button></div>
+      <div className="dashboard-card-head"><div><h3>Resume Achievement per Site</h3><p>Ringkasan 3 dashboard utama per site: Score Food Index, Skor Pelaksanaan Inspeksi, dan Leadtime Perbaikan.</p><p className="period-note">{dashboardPeriodLabel}</p></div><button onClick={()=>downloadXlsx('resume-achievement-food-index-per-site.xlsx', resumeRows)}>Export</button></div>
       <Table rows={resumeRows} columns={['no','site','site_name','score_food_index','skor_pelaksanaan','leadtime_perbaikan','achievement_site','remark']} empty="Belum ada data resume." captureAll />
     </section>}
 
@@ -1799,11 +1919,11 @@ function FoodDashboard({ context }){
         <Table rows={scoreRows} columns={['no','site','vendor','minggu','parameter','sesuai','temuan','score','remark','status']} empty="Belum ada inspeksi pada filter ini." />
       </section>
       {adminCanSeeAll(context) && <section className="dashboard-card analysis-table">
-        <div className="dashboard-card-head"><div><h3>Skor Pelaksanaan Inspeksi</h3><p>Jumlah vendor yang sudah diinspeksi dibagi jumlah vendor aktif pada bulan terpilih.</p></div><button onClick={()=>downloadXlsx('skor-pelaksanaan-inspeksi.xlsx', executionRows)}>Export</button></div>
+        <div className="dashboard-card-head"><div><h3>Skor Pelaksanaan Inspeksi</h3><p>Jumlah vendor/task inspeksi yang sudah dilakukan dibanding total vendor/task yang terbentuk pada scope filter.</p><p className="period-note">{dashboardPeriodLabel}</p></div><button onClick={()=>downloadXlsx('skor-pelaksanaan-inspeksi.xlsx', executionRows)}>Export</button></div>
         <Table rows={executionRows} />
       </section>}
       {adminCanSeeAll(context) && <section className="dashboard-card analysis-table">
-        <div className="dashboard-card-head"><div><h3>Leadtime Perbaikan</h3><p>Remark Tercapai jika close outstanding tidak melewati due date. Jika lewat due date, Tidak tercapai.</p></div><button onClick={()=>downloadXlsx('leadtime-perbaikan-food-index.xlsx', leadtimeRows)}>Export</button></div>
+        <div className="dashboard-card-head"><div><h3>Leadtime Perbaikan</h3><p>Dihitung berdasarkan minggu saat outstanding dibuat. Remark Tercapai jika close outstanding tidak melewati due date.</p></div><button onClick={()=>downloadXlsx('leadtime-perbaikan-food-index.xlsx', leadtimeRows)}>Export</button></div>
         <Table rows={leadtimeRows} empty="Belum ada due date perbaikan." />
       </section>}
     </div>
