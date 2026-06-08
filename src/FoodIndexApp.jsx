@@ -116,10 +116,10 @@ export default function FoodIndexApp({ embeddedProfile, embeddedContext, embedde
     <aside className={sidebar ? 'sidebar open' : 'sidebar'}>
       <button className="sidebar-close" onClick={()=>setSidebar(false)}>×</button>
       <div className="brand dark sidebar-brand">
-        <div className="logo fiss-custom-logo" aria-label="FISS logo">
-          <img src={fissLogo} alt="FISS Logo" className="fiss-custom-logo-img" />
+        <div className="logo fiss-custom-logo" aria-label="FIIS logo">
+          <img src={fissLogo} alt="FIIS Logo" className="fiss-custom-logo-img" />
         </div>
-        <div><b>FISS</b><span>Food index inspection system</span></div>
+        <div><b>FIIS</b><span>Food index inspection system</span></div>
       </div>
       <nav>{menu.map(([key,label,Icon]) => <button key={key} className={page===key?'active':''} onClick={()=>{setPage(key); setSidebar(false)}}><Icon size={18}/>{label}</button>)}</nav>
       <div className="sidebar-info-cards">
