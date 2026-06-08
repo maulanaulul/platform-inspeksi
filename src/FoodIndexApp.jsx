@@ -37,7 +37,7 @@ function endOfWeekSunday(monday){
 function statusClass(value=''){
   const v = String(value).toLowerCase()
   if (v.includes('approved') || v.includes('closed') || v === 'close' || v.includes('aktif')) return 'ok'
-  if (v.includes('expired') || v.includes('rejected') || v.includes('non')) return 'bad'
+  if (v.includes('expired') || v.includes('overdue') || v.includes('rejected') || v.includes('non')) return 'bad'
   if (v.includes('waiting') || v.includes('need') || v.includes('action plan')) return 'warn'
   return ''
 }
@@ -1230,6 +1230,9 @@ function FoodIndexScopedStyles(){
     }
     .food-index-app .photo-view-btn:hover { background:#dbeafe !important; }
     .food-index-app .inline-photo-view-btn { width:max-content; align-self:flex-start; margin-top:-4px; }
+    .food-index-app .outstanding-action-badge { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-width:154px; padding:10px 13px; border-radius:14px; font-size:12px; font-weight:800; line-height:1.15; white-space:normal; text-align:center; box-shadow: inset 0 1px 0 rgba(255,255,255,.75); }
+    .food-index-app .outstanding-action-badge.waiting { color:#92400e; background:linear-gradient(180deg,#fff7ed,#fef3c7); border:1px solid #fdba74; }
+    .food-index-app .outstanding-action-badge.closed { color:#166534; background:linear-gradient(180deg,#ecfdf5,#dcfce7); border:1px solid #86efac; }
     .food-index-app .photo-view-backdrop {
       position:fixed !important;
       inset:0 !important;
@@ -2799,6 +2802,24 @@ function FoodOutstanding({ context, profile }){
     })
   }
 
+  function getOutstandingDisplayStatus(row){
+    const outstandingStatus = String(row?.status || '').trim()
+    const dueDate = String(row?.food_findings?.due_date || '').slice(0,10)
+    if (outstandingStatus === 'Closed') return 'Closed'
+    if (outstandingStatus === 'Waiting Close Approval') return 'Waiting Close Approval'
+    if (!dueDate) return 'Need Action Plan'
+    if (dueDate < today()) return 'Overdue'
+    return 'Open'
+  }
+
+  function renderOutstandingAction(row, hasPlan){
+    const outstandingStatus = String(row?.status || '').trim()
+    if (!hasPlan) return <button onClick={()=>openActionPlan(row)}>Isi Tindakan</button>
+    if (outstandingStatus === 'Closed') return <span className="outstanding-action-badge closed"><CheckCircle2 size={14}/> Closed</span>
+    if (outstandingStatus === 'Waiting Close Approval') return <span className="outstanding-action-badge waiting"><ShieldCheck size={14}/> Waiting Close Approval</span>
+    return <button onClick={()=>openCloseOutstanding(row)}>Close Outstanding</button>
+  }
+
   async function saveCloseOutstanding(){
     if (!closeActive) return
     setSaving(true); setMsg(''); setError('')
@@ -2880,7 +2901,7 @@ function FoodOutstanding({ context, profile }){
     corrective_action: r.food_findings?.corrective_action || '-',
     preventive_action: r.food_findings?.preventive_action || '-',
     due_date: r.food_findings?.due_date || '-',
-    status_task: r.food_weekly_tasks?.status || '-',
+    status_task: getOutstandingDisplayStatus(r),
     status_outstanding: r.status || '-'
   }))
   const outstandingExportColumns = ['site','vendor','minggu','parameter','catatan_temuan','corrective_action','preventive_action','due_date','status_task','status_outstanding']
@@ -2891,7 +2912,7 @@ function FoodOutstanding({ context, profile }){
       {loading ? <p>Memuat outstanding...</p> : <div className="table-wrap outstanding-table-wrap" style={{maxHeight:520, overflow:'auto'}}><table><thead><tr><th>Site</th><th>Vendor</th><th>Minggu</th><th>Parameter</th><th>Catatan</th><th>Evidence</th><th>Corrective</th><th>Preventive</th><th>Due Date</th><th>Status Task</th><th>Aksi</th></tr></thead><tbody>{rows.map(r => {
         const answer = r.food_findings?.food_inspection_answers
         const hasPlan = cleanText(r.food_findings?.corrective_action) && cleanText(r.food_findings?.preventive_action) && cleanText(r.food_findings?.due_date)
-        return <tr key={r.id}><td>{r.food_weekly_tasks?.sites?.site_code || '-'}</td><td>{r.food_weekly_tasks?.food_vendors?.vendor_name || '-'}</td><td>{r.food_weekly_tasks?.week_start_date || '-'}</td><td>{answer?.food_parameters?.parameter_text || '-'}</td><td>{answer?.finding_note || '-'}</td><td>{answer?.evidence_photo_url ? <button type="button" className="photo-view-btn" onClick={()=>openOutstandingPhoto(answer.evidence_photo_url, 'Foto Evidence', r)}><ImageIcon size={14}/> View</button> : '-'}</td><td>{r.food_findings?.corrective_action || '-'}</td><td>{r.food_findings?.preventive_action || '-'}</td><td>{r.food_findings?.due_date || '-'}</td><td className="status-task-cell"><TaskStatusPill value={r.food_weekly_tasks?.status} /></td><td>{!hasPlan ? <button onClick={()=>openActionPlan(r)}>Isi Tindakan</button> : r.status === 'Closed' ? <StatusPill value="Closed" /> : r.status === 'Waiting Close Approval' ? <StatusPill value="Waiting Close Approval" /> : <button onClick={()=>openCloseOutstanding(r)}>Close Outstanding</button>}</td></tr>
+        return <tr key={r.id}><td>{r.food_weekly_tasks?.sites?.site_code || '-'}</td><td>{r.food_weekly_tasks?.food_vendors?.vendor_name || '-'}</td><td>{r.food_weekly_tasks?.week_start_date || '-'}</td><td>{answer?.food_parameters?.parameter_text || '-'}</td><td>{answer?.finding_note || '-'}</td><td>{answer?.evidence_photo_url ? <button type="button" className="photo-view-btn" onClick={()=>openOutstandingPhoto(answer.evidence_photo_url, 'Foto Evidence', r)}><ImageIcon size={14}/> View</button> : '-'}</td><td>{r.food_findings?.corrective_action || '-'}</td><td>{r.food_findings?.preventive_action || '-'}</td><td>{r.food_findings?.due_date || '-'}</td><td className="status-task-cell"><TaskStatusPill value={getOutstandingDisplayStatus(r)} /></td><td>{renderOutstandingAction(r, hasPlan)}</td></tr>
       })}</tbody></table>{!rows.length && <p className="muted table-empty">Belum ada outstanding / temuan.</p>}</div>}
     </Panel>
     <Panel title="Export Outstanding" action={<button onClick={()=>downloadXlsx('food-index-outstanding.xlsx', tableRows)}><Download size={16}/> Export</button>}>
