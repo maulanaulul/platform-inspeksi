@@ -103,12 +103,51 @@ function Login(){
   async function submit(e){ e.preventDefault(); const {error}=await supabase.auth.signInWithPassword({email:normEmail(email),password}); if(error) setMsg(error.message) }
   return <section className="login-page"><div className="login-hero"><div className="brand"><img src={logoSrgs} className="brand-logo-img"/><div><b>DRD Driver</b><span>Validasi DRD dan Induksi Driver</span></div></div><h1>DRD dan induksi driver dalam satu alur monitoring.</h1><p>Driver mengerjakan DRD otomatis saat belum valid, dan mengerjakan induksi saat kembali onsite setelah cuti.</p><div className="chips"><span>Bank Soal Langsung</span><span>Induksi Video</span><span>Dashboard Site</span></div></div><form className="login-card" onSubmit={submit}><ShieldCheck color="#2563eb" size={42}/><h2>Masuk</h2><p>Gunakan akun yang sudah dibuat dan dimapping administrator.</p><label>Email<input required value={email} onChange={e=>setEmail(e.target.value)} /></label><label>Password<input required type="password" value={password} onChange={e=>setPassword(e.target.value)} /></label>{msg&&<p className="message error">{msg}</p>}<button>Masuk</button></form></section>
 }
+
+function SelfPasswordModal({profile,onClose}){
+  const [form,setForm]=useState({oldPassword:'',newPassword:'',confirmPassword:''}), [saving,setSaving]=useState(false), [msg,setMsg]=useState(''), [err,setErr]=useState('')
+  async function submit(e){
+    e.preventDefault(); setErr(''); setMsg('')
+    try{
+      const email=normEmail(profile?.email)
+      const oldPassword=clean(form.oldPassword), newPassword=clean(form.newPassword), confirmPassword=clean(form.confirmPassword)
+      if(!email) throw new Error('Email akun tidak ditemukan. Silakan logout lalu login ulang.')
+      if(!oldPassword) throw new Error('Password lama wajib diisi.')
+      if(!newPassword||newPassword.length<6) throw new Error('Password baru minimal 6 karakter.')
+      if(newPassword!==confirmPassword) throw new Error('Konfirmasi password baru tidak sama.')
+      if(oldPassword===newPassword) throw new Error('Password baru tidak boleh sama dengan password lama.')
+      setSaving(true)
+      const {error:verifyError}=await supabase.auth.signInWithPassword({email,password:oldPassword})
+      if(verifyError) throw new Error('Password lama tidak sesuai.')
+      const {error:updateError}=await supabase.auth.updateUser({password:newPassword})
+      if(updateError) throw updateError
+      setMsg('Password berhasil diganti. Gunakan password baru saat login berikutnya.')
+      setForm({oldPassword:'',newPassword:'',confirmPassword:''})
+      setTimeout(()=>onClose?.(),1200)
+    }catch(e){ setErr(e.message||'Gagal mengganti password.') }
+    finally{ setSaving(false) }
+  }
+  return <div className="modal-backdrop" role="dialog" aria-modal="true" onMouseDown={onClose}>
+    <div className="modal-card" onMouseDown={e=>e.stopPropagation()}>
+      <div className="modal-head"><div><h3>Ganti Password Saya</h3><p>Password akan diperbarui untuk akun yang sedang login.</p></div><button className="secondary" onClick={onClose}>×</button></div>
+      <form className="form-grid" onSubmit={submit} autoComplete="off">
+        {err&&<p className="message error">{err}</p>}
+        {msg&&<p className="message">{msg}</p>}
+        <label>Email<input value={profile?.email||''} disabled/></label>
+        <label>Password Lama<input type="password" autoComplete="current-password" value={form.oldPassword} onChange={e=>setForm({...form,oldPassword:e.target.value})}/></label>
+        <label>Password Baru<input type="password" autoComplete="new-password" value={form.newPassword} onChange={e=>setForm({...form,newPassword:e.target.value})} placeholder="Minimal 6 karakter"/></label>
+        <label>Konfirmasi Password Baru<input type="password" autoComplete="new-password" value={form.confirmPassword} onChange={e=>setForm({...form,confirmPassword:e.target.value})}/></label>
+        <div className="row-actions"><button type="button" className="secondary" onClick={onClose}>Batal</button><button disabled={saving}>{saving?'Menyimpan...':'Simpan Password'}</button></div>
+      </form>
+    </div>
+  </div>
+}
 function Blocked({text}){ return <div className="full-center"><div className="panel"><h2>{text}</h2><button onClick={()=>supabase.auth.signOut()}>Logout</button></div></div> }
 function FullCenter({text}){ return <div className="full-center"><div className="panel"><h2>{text}</h2></div></div> }
 function SessionPicker({profile,access,onSelect}){ if(!access.length) return <Blocked text="Akses DRD Driver belum dimapping."/>; return <section className="context-page"><div className="context-card"><h1>Pilih Sesi DRD Driver</h1><p>{profile.nama} · {profile.email}</p><div className="cards">{access.map(a=><div className="card" key={a.id}><h3>{a.role}</h3><p>{a.sites?.site_name || 'All Site'}</p><button onClick={()=>onSelect(a)}>Masuk</button></div>)}</div><button className="secondary" onClick={()=>supabase.auth.signOut()}>Logout</button></div></section> }
 
 function Shell({profile,work,setWork}){
-  const [page,setPage]=useState(()=>isDriver(work)?'test':'dashboard'), [sidebar,setSidebar]=useState(false)
+  const [page,setPage]=useState(()=>isDriver(work)?'test':'dashboard'), [sidebar,setSidebar]=useState(false), [passwordOpen,setPasswordOpen]=useState(false)
   let nav=isDriver(work) ? [] : [['dashboard','Dashboard',BarChart3]]
   if(isAdmin(work)) nav.push(['admin','Admin Panel',Users],['questions','Bank Soal',FileQuestion],['videos','Video Induksi',Video],['drivers','Master Driver',Truck],['cuti','Periode Cuti',CalendarCheck],['results','Hasil DRD & Induksi',Award])
   if(isGL(work)) nav.push(['drivers','Master Driver',Truck],['cuti','Periode Cuti',CalendarCheck],['results','Hasil DRD & Induksi',Award])
@@ -118,7 +157,7 @@ function Shell({profile,work,setWork}){
   const title=nav.find(n=>n[0]===safePage)?.[1]||'DRD Driver'
   return <div className="app real-ui-shell">
     <button className="icon mobile mobile-menu-trigger" onClick={()=>setSidebar(true)}><Menu size={20}/></button>{sidebar&&<button className="mobile-nav-backdrop" aria-label="Tutup navigasi" onClick={()=>setSidebar(false)}/>}<aside className={sidebar?'sidebar open':'sidebar'}><button className="sidebar-close" onClick={()=>setSidebar(false)}>×</button><div className="brand dark sidebar-brand"><img src={logoSrgs} alt="DRD" className="brand-logo-img"/><div><b>DRD Driver</b><span>{work.role} · {work.sites?.site_name}</span></div></div><div className="nav">{nav.map(([k,l,I])=><button key={k} className={page===k?'active':''} onClick={()=>{setPage(k);setSidebar(false)}}><I size={18}/> {l}</button>)}</div><div className="sidebar-info-cards"><div className="sidebar-info-card"><b>{work.sites?.site_name||'All Site'}</b><span>Lokasi kerja aktif</span></div><div className="sidebar-info-card"><b>DRD + Induksi</b><span>Validasi driver, cuti, onsite, dan induksi</span></div></div><div className="sidebar-card"><b>Monitoring Driver</b><p>DRD otomatis muncul saat driver belum valid. Induksi muncul saat driver kembali onsite setelah cuti.</p></div><div className="side-bottom"><button className="secondary" onClick={()=>setWork(null)}>Ganti Aplikasi</button></div></aside>
-    <main className="main"><div className="top app-header"><div className="header-copy"><h1>{title}</h1><p>Kelola DRD, induksi driver, masa dinas, cuti, hasil tes, dan pencapaian site.</p></div><div className="header-actions redesign-actions"><div className="user-chip"><Users size={16}/><span>{profile?.nama} · {work.sites?.site_name||'All Site'}</span></div><button className="secondary" onClick={()=>setWork(null)}>Ganti Aplikasi</button><button className="secondary" onClick={()=>supabase.auth.signOut()}><LogOut size={16}/>Logout</button></div></div><DRD page={safePage} profile={profile} work={work}/></main>
+    <main className="main"><div className="top app-header"><div className="header-copy"><h1>{title}</h1><p>Kelola DRD, induksi driver, masa dinas, cuti, hasil tes, dan pencapaian site.</p></div><div className="header-actions redesign-actions"><div className="user-chip"><Users size={16}/><span>{profile?.nama} · {work.sites?.site_name||'All Site'}</span></div><button className="secondary" onClick={()=>setPasswordOpen(true)}>Ganti Password</button><button className="secondary" onClick={()=>setWork(null)}>Ganti Aplikasi</button><button className="secondary" onClick={()=>supabase.auth.signOut()}><LogOut size={16}/>Logout</button></div></div>{passwordOpen&&<SelfPasswordModal profile={profile} onClose={()=>setPasswordOpen(false)}/>}<DRD page={safePage} profile={profile} work={work}/></main>
   </div>
 }
 function DRD({page,profile,work}){ if(page==='dashboard')return <Dashboard work={work}/>; if(page==='admin')return <SharedAdminPanel profile={profile} context={work}/>; if(page==='questions')return <Questions/>; if(page==='videos')return <InductionVideos/>; if(page==='drivers')return <MasterDriver profile={profile} work={work}/>; if(page==='cuti')return <CutiPeriods profile={profile} work={work}/>; if(page==='test')return <DriverTest profile={profile}/>; if(page==='induction')return <DriverInduction profile={profile}/>; return <Results profile={profile} work={work}/> }
@@ -190,7 +229,9 @@ function Dashboard({work}){
   const sudahDrdRows=driverDrdRows.filter(r=>r.status_drd==='Sudah DRD').sort((a,b)=>String(a.site).localeCompare(String(b.site))||String(a.nama_driver).localeCompare(String(b.nama_driver)))
   const belumDrdRows=driverDrdRows.filter(r=>r.status_drd==='Belum DRD').sort((a,b)=>String(a.site).localeCompare(String(b.site))||String(a.nama_driver).localeCompare(String(b.nama_driver)))
   const inductionRows=periods.map(p=>({ driver:p.drivers?.nama_driver, nrp:p.drivers?.nrp_driver, site:p.drivers?.sites?.site_code, cuti_mulai:p.cuti_start_date, onsite:p.onsite_date, status:p.status, alert:isOnsiteDue(p)?'Open - Wajib Induksi':'-' }))
-  return <div className="stack"><DashboardDateFilter dateFrom={dateFrom} dateTo={dateTo} setDateFrom={setDateFrom} setDateTo={setDateTo} sites={sites} siteFilter={siteFilter} setSiteFilter={setSiteFilter} showSiteFilter={isAdmin(work)} onClear={()=>{setDateFrom('');setDateTo('');setSiteFilter('')}}/><div className="kpi-grid"><Kpi title="Total Driver" value={total} icon={<Truck/>}/><Kpi title="Sudah DRD" value={drdOk} icon={<CheckCircle2/>}/><Kpi title="Belum DRD" value={drdBelum} icon={<AlertTriangle/>}/><Kpi title="Achievement DRD" value={`${drdAch}%`} icon={<BarChart3/>}/><Kpi title="Open Induksi" value={openInduksi} icon={<Video/>}/><Kpi title="Induksi Closed" value={closedInduksi} icon={<ShieldCheck/>}/><Kpi title="Achievement Induksi" value={`${inductionAch}%`} icon={<Award/>}/><Kpi title="Masa Dinas Habis" value={drivers.filter(d=>isExpired(d.end_masa_dinas)).length} icon={<CalendarCheck/>}/></div><Panel title="Dashboard DRD per Site" desc="Pencapaian DRD dihitung dari driver aktif yang sudah lulus dan belum expired." action={<button onClick={()=>exportXlsx('achievement-drd-site.xlsx',siteRows)}><Download size={16}/> Export</button>}><div className="site-chart">{siteRows.map(r=><div className="site-bar" key={r.site}><div className="site-meta"><b>{r.site}</b><span>{r.drd_ok}/{r.total} · {r.achievement}%</span></div><div className="bar"><span style={{width:`${Math.min(r.achievement,100)}%`}}/></div></div>)}</div><ScrollTable rows={siteRows} height={320}/></Panel><Panel title="Driver Sudah DRD" desc="Driver aktif yang sudah lulus DRD dan valid_until belum expired." action={<button onClick={()=>exportXlsx('driver-sudah-drd.xlsx',sudahDrdRows)}><Download size={16}/> Export</button>}><ScrollTable rows={sudahDrdRows} height={360}/></Panel><Panel title="Driver Belum DRD" desc="Driver aktif yang belum pernah lulus DRD atau masa berlaku DRD-nya sudah expired." action={<button onClick={()=>exportXlsx('driver-belum-drd.xlsx',belumDrdRows)}><Download size={16}/> Export</button>}><ScrollTable rows={belumDrdRows} height={420}/></Panel><Panel title="Dashboard Induksi Driver" desc="Driver yang sudah onsite setelah cuti tetapi belum lulus induksi dihitung Open dan mengurangi achievement induksi site." action={<button onClick={()=>exportXlsx('dashboard-induksi-driver.xlsx',inductionRows)}><Download size={16}/> Export</button>}><div className="summary-strip"><span><b>{inductionTarget}</b> Wajib Induksi</span><span><b>{openPeriodInput}</b> Butuh Input Periode</span><span><b>{openInduksi}</b> Open Induksi</span><span><b>{closedInduksi}</b> Closed</span><span><b>{inductionAch}%</b> Achievement</span></div><ScrollTable rows={inductionRows} height={360}/></Panel></div>
+  const detailDriverRows=[...driverDrdRows].sort((a,b)=>String(a.site).localeCompare(String(b.site))||String(a.nama_driver).localeCompare(String(b.nama_driver)))
+  const detailDriverFileName=`detail-driver-dashboard-drd-${siteFilter ? (sites.find(s=>String(s.id)===String(siteFilter))?.site_code || 'site-terpilih') : 'semua-site'}.xlsx`
+  return <div className="stack"><DashboardDateFilter dateFrom={dateFrom} dateTo={dateTo} setDateFrom={setDateFrom} setDateTo={setDateTo} sites={sites} siteFilter={siteFilter} setSiteFilter={setSiteFilter} showSiteFilter={isAdmin(work)} onClear={()=>{setDateFrom('');setDateTo('');setSiteFilter('')}}/><div className="kpi-grid"><Kpi title="Total Driver" value={total} icon={<Truck/>}/><Kpi title="Sudah DRD" value={drdOk} icon={<CheckCircle2/>}/><Kpi title="Belum DRD" value={drdBelum} icon={<AlertTriangle/>}/><Kpi title="Achievement DRD" value={`${drdAch}%`} icon={<BarChart3/>}/><Kpi title="Open Induksi" value={openInduksi} icon={<Video/>}/><Kpi title="Induksi Closed" value={closedInduksi} icon={<ShieldCheck/>}/><Kpi title="Achievement Induksi" value={`${inductionAch}%`} icon={<Award/>}/><Kpi title="Masa Dinas Habis" value={drivers.filter(d=>isExpired(d.end_masa_dinas)).length} icon={<CalendarCheck/>}/></div><Panel title="Dashboard DRD per Site" desc="Pencapaian DRD dihitung dari driver aktif yang sudah lulus dan belum expired." action={<div className="row-actions"><button onClick={()=>exportXlsx('achievement-drd-site.xlsx',siteRows)}><Download size={16}/> Export Summary</button><button className="secondary" onClick={()=>exportXlsx(detailDriverFileName,detailDriverRows)}><Download size={16}/> Export Detail Driver</button></div>}><div className="site-chart">{siteRows.map(r=><div className="site-bar" key={r.site}><div className="site-meta"><b>{r.site}</b><span>{r.drd_ok}/{r.total} · {r.achievement}%</span></div><div className="bar"><span style={{width:`${Math.min(r.achievement,100)}%`}}/></div></div>)}</div><ScrollTable rows={siteRows} height={320}/></Panel><Panel title="Detail Driver Dashboard DRD" desc="Detail seluruh driver aktif yang menjadi denominator dashboard. Jika filter site BRCB dipilih, jumlah row export harus sama dengan total dashboard BRCB." action={<button onClick={()=>exportXlsx(detailDriverFileName,detailDriverRows)}><Download size={16}/> Export Detail Driver</button>}><ScrollTable rows={detailDriverRows} height={420}/></Panel><Panel title="Driver Sudah DRD" desc="Driver aktif yang sudah lulus DRD dan valid_until belum expired." action={<button onClick={()=>exportXlsx('driver-sudah-drd.xlsx',sudahDrdRows)}><Download size={16}/> Export</button>}><ScrollTable rows={sudahDrdRows} height={360}/></Panel><Panel title="Driver Belum DRD" desc="Driver aktif yang belum pernah lulus DRD atau masa berlaku DRD-nya sudah expired." action={<button onClick={()=>exportXlsx('driver-belum-drd.xlsx',belumDrdRows)}><Download size={16}/> Export</button>}><ScrollTable rows={belumDrdRows} height={420}/></Panel><Panel title="Dashboard Induksi Driver" desc="Driver yang sudah onsite setelah cuti tetapi belum lulus induksi dihitung Open dan mengurangi achievement induksi site." action={<button onClick={()=>exportXlsx('dashboard-induksi-driver.xlsx',inductionRows)}><Download size={16}/> Export</button>}><div className="summary-strip"><span><b>{inductionTarget}</b> Wajib Induksi</span><span><b>{openPeriodInput}</b> Butuh Input Periode</span><span><b>{openInduksi}</b> Open Induksi</span><span><b>{closedInduksi}</b> Closed</span><span><b>{inductionAch}%</b> Achievement</span></div><ScrollTable rows={inductionRows} height={360}/></Panel></div>
 }
 function Kpi({title,value,icon}){ return <div className="kpi"><div><span>{title}</span><strong>{value}</strong></div><div className="kpi-icon">{icon}</div></div> }
 
@@ -254,12 +295,17 @@ function MasterDriver({profile,work}){
   const [form,setForm]=useState(emptyForm)
   useEffect(()=>{load()},[work.id])
   async function load(){
-    let dq=supabase.from('drivers').select('*,sites(site_code,site_name),vendors(vendor_name)').order('created_at',{ascending:false})
-    if(!isAdmin(work)) dq=dq.eq('site_id',work.site_id)
-    const [{data:d},{data:v},{data:s}]=await Promise.all([
-      dq,
-      supabase.from('vendors').select('*').order('vendor_name'),
-      supabase.from('sites').select('*').neq('site_code','JIEP').order('site_code')
+    // WAJIB pakai fetchAllPages. Supabase .select() biasa hanya mengembalikan default ±1000 row,
+    // sehingga saat data seluruh site besar, sebagian driver BRCB tidak ikut tertarik di Master Driver/export.
+    const buildDrivers=()=>{
+      let q=supabase.from('drivers').select('*,sites(site_code,site_name),vendors(vendor_name)').order('created_at',{ascending:false})
+      if(!isAdmin(work)) q=q.eq('site_id',work.site_id)
+      return q
+    }
+    const [d,v,s]=await Promise.all([
+      fetchAllPages(buildDrivers),
+      fetchAllPages(()=>supabase.from('vendors').select('*').order('vendor_name')),
+      fetchAllPages(()=>supabase.from('sites').select('*').neq('site_code','JIEP').order('site_code'))
     ])
     setDrivers(d||[]); setVendors(v||[]); setSites(s||[])
   }
@@ -368,8 +414,8 @@ function MasterDriver({profile,work}){
     setAuthProgress({processed:0,created:0,skipped:0,failed:0,remaining:null})
     let totalProcessed=0, totalCreated=0, totalSkipped=0, totalFailed=0, remaining=null
     try{
-      for(let batch=0; batch<30; batch++){
-        const {data,error}=await supabase.functions.invoke('bulk-create-driver-auth',{ body:{ app_id:appId, site_id:isAdmin(work)?null:work.site_id, limit:50 } })
+      for(let batch=0; batch<100; batch++){
+        const {data,error}=await supabase.functions.invoke('bulk-create-driver-auth',{ body:{ app_id:appId, site_id:isAdmin(work)?null:work.site_id, limit:20 } })
         if(error){
           let detail=error.message||'Gagal generate auth driver'
           try{
