@@ -16,25 +16,69 @@ const QUESTION_CATEGORIES = ['DRD', 'Induksi Driver']
 
 function clean(v){ return String(v ?? '').trim() }
 function makeVendorCode(idx=0){ return `VEN-${Date.now().toString(36).toUpperCase()}-${String(idx+1).padStart(3,'0')}` }
+function pad2(v){ return String(v).padStart(2,'0') }
+function expandYear(v){
+  const y = Number(v)
+  if(!Number.isFinite(y)) return NaN
+  if(y < 100) return y >= 70 ? 1900 + y : 2000 + y
+  return y
+}
+function datePartsToIso(year, month, day){
+  const y = expandYear(year), m = Number(month), d = Number(day)
+  if(!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) return ''
+  if(y < 1900 || y > 2100 || m < 1 || m > 12 || d < 1 || d > 31) return ''
+  const dt = new Date(Date.UTC(y, m - 1, d))
+  if(dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return ''
+  return `${y}-${pad2(m)}-${pad2(d)}`
+}
+function dateToIso(v){
+  if(!(v instanceof Date) || Number.isNaN(v.getTime())) return ''
+  return datePartsToIso(v.getUTCFullYear(), v.getUTCMonth() + 1, v.getUTCDate())
+}
 function excelDateToIso(v){
   if(v === null || v === undefined || v === '') return ''
+  if(v instanceof Date) return dateToIso(v)
   if(typeof v === 'number'){
     const d = XLSX.SSF.parse_date_code(v)
-    if(d) return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`
+    return d ? datePartsToIso(d.y, d.m, d.d) : ''
   }
-  const raw = clean(v)
+  const raw = clean(v).replace(/[​-‍﻿]/g,'').replace(/\s+/g,' ')
   if(!raw) return ''
-  if(/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw
-  const m = raw.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/)
-  if(m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`
+  if(/^\d+(\.\d+)?$/.test(raw)){
+    const n = Number(raw)
+    if(n > 20000 && n < 90000){
+      const d = XLSX.SSF.parse_date_code(n)
+      const iso = d ? datePartsToIso(d.y, d.m, d.d) : ''
+      if(iso) return iso
+    }
+  }
+  const ymd = raw.match(/^(\d{4})[\/.-](\d{1,2})[\/.-](\d{1,2})(?:[ T].*)?$/)
+  if(ymd) return datePartsToIso(ymd[1], ymd[2], ymd[3]) || raw
+  const dmy = raw.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})(?:[ T].*)?$/)
+  if(dmy) return datePartsToIso(dmy[3], dmy[2], dmy[1]) || raw
+  const short = raw.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2})(?:[ T].*)?$/)
+  if(short){
+    const a = Number(short[1]), b = Number(short[2])
+    // Excel sering menampilkan date cell sebagai m/d/yy, misalnya 6/1/26 untuk 2026-06-01.
+    if(a > 12 && b <= 12) return datePartsToIso(short[3], b, a) || raw
+    if(b > 12 && a <= 12) return datePartsToIso(short[3], a, b) || raw
+    return datePartsToIso(short[3], a, b) || raw
+  }
+  const parsed = new Date(raw)
+  if(!Number.isNaN(parsed.getTime())) return dateToIso(parsed)
   return raw
+}
+function isoToExcelDate(v){
+  const iso = excelDateToIso(v)
+  if(!isIsoDateString(iso)) return v || ''
+  const [y,m,d] = iso.split('-').map(Number)
+  return new Date(Date.UTC(y, m - 1, d))
 }
 function isIsoDateString(v){
   const raw = clean(v)
   if(!raw) return true
-  if(!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return false
-  const d = new Date(`${raw}T00:00:00`)
-  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0,10) === raw
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  return !!m && datePartsToIso(m[1], m[2], m[3]) === raw
 }
 function normEmail(v){ return clean(v).toLowerCase() }
 function isValidEmail(v){ const e = normEmail(v); return !e || /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/.test(e) }
@@ -46,8 +90,32 @@ function isDriver(w){ return w?.role === 'Driver' }
 function isExpired(date){ return !!date && date < today() }
 function isOnsiteDue(p){ return !!p?.onsite_date && p.onsite_date <= today() && p.status !== 'Closed' }
 function exportXlsx(name, rows){ const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows?.length ? rows : [{}]), 'Data'); XLSX.writeFile(wb, name) }
-function templateXlsx(name, rows){ const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Template'); XLSX.writeFile(wb, name) }
-async function readExcel(file){ const buf = await file.arrayBuffer(); const wb = XLSX.read(buf,{type:'array'}); return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:''}) }
+function templateXlsx(name, rows, dateColumns=[]){
+  const prepared = (rows || []).map(row => {
+    const copy = {...row}
+    dateColumns.forEach(col => { if(copy[col]) copy[col] = isoToExcelDate(copy[col]) })
+    return copy
+  })
+  const wb = XLSX.utils.book_new()
+  const ws = XLSX.utils.json_to_sheet(prepared)
+  const headers = Object.keys(prepared[0] || {})
+  dateColumns.forEach(col => {
+    const c = headers.indexOf(col)
+    if(c < 0) return
+    for(let r=1; r<=prepared.length; r++){
+      const addr = XLSX.utils.encode_cell({r, c})
+      if(ws[addr]) ws[addr].z = 'yyyy-mm-dd'
+    }
+  })
+  ws['!cols'] = headers.map(h => ({wch: ['nama_driver','question_text'].includes(h) ? 28 : ['mulai_dinas','end_masa_dinas'].includes(h) ? 14 : 16}))
+  XLSX.utils.book_append_sheet(wb, ws, 'Template')
+  XLSX.writeFile(wb, name, {cellDates:true})
+}
+async function readExcel(file){
+  const buf = await file.arrayBuffer()
+  const wb = XLSX.read(buf,{type:'array', cellDates:true, dateNF:'yyyy-mm-dd'})
+  return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:'', raw:true})
+}
 const QUESTION_IMAGE_BUCKET = 'drd-assets'
 function questionImageStyle(){ return {maxWidth:'100%',maxHeight:260,objectFit:'contain',borderRadius:14,border:'1px solid #dbeafe',background:'#f8fbff',margin:'10px 0 16px'} }
 async function uploadQuestionImage(file, prefix='question'){
@@ -490,7 +558,7 @@ function MasterDriver({profile,work}){
         end_masa_dinas:d.end_masa_dinas||'',
         status:d.status||'Aktif'
       }))
-    templateXlsx('template-update-masa-dinas-driver.xlsx', rows.length ? rows : [{site_code:work.sites?.site_code||'',nrp_driver:'',nama_driver:'',mulai_dinas:'2026-04-01',end_masa_dinas:'2026-05-01',status:'Aktif'}])
+    templateXlsx('template-update-masa-dinas-driver.xlsx', rows.length ? rows : [{site_code:work.sites?.site_code||'',nrp_driver:'',nama_driver:'',mulai_dinas:'2026-04-01',end_masa_dinas:'2026-05-01',status:'Aktif'}], ['mulai_dinas','end_masa_dinas'])
   }
   async function previewMasaDinasFile(file){
     if(!file) return
@@ -639,7 +707,7 @@ function MasterDriver({profile,work}){
     </div>}
     <Panel title="Upload Bulk Master Driver DRD" desc="Template tidak memakai kode unik. Cukup isi site_code, nama_driver, nrp_driver, email/password bila perlu akun, vendor_name bila ada, serta tanggal masa dinas.">
       <style>{'@keyframes srgsSpin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}'}</style>
-      <div className="import-actions"><button className="secondary" disabled={importing||authGenerating} onClick={()=>templateXlsx('template-master-driver-drd.xlsx',[{site_code:'BAYA',nama_driver:'Budi',nrp_driver:'D-001',email:'budi@company.co.id',password:'password123',vendor_name:'PBM',mulai_dinas:'2026-04-01',end_masa_dinas:'2026-05-01',status:'Aktif'}])}><Download size={16}/> Download Template Excel</button><label className="upload-line"><Upload size={16}/> Upload Excel<input type="file" accept=".xlsx,.xls" disabled={importing||authGenerating} onChange={e=>previewFile(e.target.files?.[0])}/></label>{preview.length>0&&<button disabled={importing||authGenerating} onClick={importRows}>{importing?'Mengimpor...':'Submit Import Valid'}</button>}{isAdmin(work)&&<button className="secondary" disabled={importing||authGenerating} onClick={generateMissingDriverAuth}><Users size={16}/> {authGenerating?'Generate Auth...':'Generate Auth Driver Belum Ada'}</button>}</div>
+      <div className="import-actions"><button className="secondary" disabled={importing||authGenerating} onClick={()=>templateXlsx('template-master-driver-drd.xlsx',[{site_code:'BAYA',nama_driver:'Budi',nrp_driver:'D-001',email:'budi@company.co.id',password:'password123',vendor_name:'PBM',mulai_dinas:'2026-04-01',end_masa_dinas:'2026-05-01',status:'Aktif'}], ['mulai_dinas','end_masa_dinas'])}><Download size={16}/> Download Template Excel</button><label className="upload-line"><Upload size={16}/> Upload Excel<input type="file" accept=".xlsx,.xls" disabled={importing||authGenerating} onChange={e=>previewFile(e.target.files?.[0])}/></label>{preview.length>0&&<button disabled={importing||authGenerating} onClick={importRows}>{importing?'Mengimpor...':'Submit Import Valid'}</button>}{isAdmin(work)&&<button className="secondary" disabled={importing||authGenerating} onClick={generateMissingDriverAuth}><Users size={16}/> {authGenerating?'Generate Auth...':'Generate Auth Driver Belum Ada'}</button>}</div>
       {importing&&<div className="message" style={{display:'flex',alignItems:'center',gap:10}}><span aria-hidden="true" style={{width:16,height:16,border:'2px solid #bfdbfe',borderTopColor:'#2563eb',borderRadius:'50%',display:'inline-block',animation:'srgsSpin 0.8s linear infinite'}}/><span>Import sedang diproses... {importProgress.current}/{importProgress.total} baris. Mohon tunggu untuk file besar.</span></div>}
       {authGenerating&&<div className="message" style={{display:'flex',alignItems:'center',gap:10}}><span aria-hidden="true" style={{width:16,height:16,border:'2px solid #bfdbfe',borderTopColor:'#2563eb',borderRadius:'50%',display:'inline-block',animation:'srgsSpin 0.8s linear infinite'}}/><span>Generate auth driver sedang diproses... diproses {authProgress.processed}, auth baru {authProgress.created}, skip {authProgress.skipped}, gagal {authProgress.failed}{authProgress.remaining!==null?`, sisa ${authProgress.remaining}`:''}. Password awal memakai NRP.</span></div>}
       {preview.length>0&&<div className="upload-preview"><DataTable rows={preview}/></div>}
