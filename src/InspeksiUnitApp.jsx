@@ -41,6 +41,11 @@ function pmChecklistLabel(parameter, plan){
 function generatedPreviewCode(prefix, rowIndex){
   return `${prefix}-AUTO-${String(rowIndex).padStart(3, '0')}`
 }
+function generatedRecordCode(prefix){
+  const fallback = `${Date.now()}${Math.random().toString(36).slice(2, 10)}`
+  const raw = globalThis.crypto?.randomUUID?.() || fallback
+  return `${prefix}-${String(raw).replace(/-/g, '').slice(0, 8).toUpperCase()}`
+}
 
 function clean(v){ return String(v ?? '').trim() }
 function normEmail(v){ return clean(v).toLowerCase() }
@@ -664,7 +669,15 @@ function MasterUnits({ profile, context }){
   function edit(r){ setEditing(r.id); setForm({ site_id:r.site_id, unit_code:r.unit_code, unit_name:r.unit_name, unit_type:r.unit_type || '', location:r.location || '', status:r.status || 'Aktif' }); window.scrollTo({ top:0, behavior:'smooth' }) }
   async function save(e){
     e.preventDefault(); setMessage('')
-    const payload = { site_id: adminHO ? form.site_id : context.site_id, unit_name: clean(form.unit_name), unit_type: clean(form.unit_type), location: clean(form.location), status: form.status || 'Aktif', created_by: profile.id }
+    const payload = {
+      site_id: adminHO ? form.site_id : context.site_id,
+      unit_name: clean(form.unit_name),
+      unit_type: clean(form.unit_type),
+      location: clean(form.location),
+      status: form.status || 'Aktif',
+      created_by: profile.id
+    }
+    if (!editing) payload.unit_code = generatedRecordCode('UNIT')
     const res = editing ? await supabase.from('inspection_units').update(payload).eq('id', editing) : await supabase.from('inspection_units').insert(payload)
     setMessage(res.error ? res.error.message : editing ? 'Unit berhasil diupdate.' : 'Unit berhasil ditambahkan.')
     if (!res.error){ reset(); load() }
@@ -691,7 +704,15 @@ function MasterUnits({ profile, context }){
   async function submitImport(){
     const valid = preview.filter(r => !r.error)
     if (!valid.length) return setMessage('Tidak ada baris valid.')
-    const payload = valid.map(r => ({ site_id:r.site_id, unit_name:r.unit_name, unit_type:r.unit_type, location:r.location, status:r.status, created_by:profile.id }))
+    const payload = valid.map(r => ({
+      site_id:r.site_id,
+      unit_code: generatedRecordCode('UNIT'),
+      unit_name:r.unit_name,
+      unit_type:r.unit_type,
+      location:r.location,
+      status:r.status,
+      created_by:profile.id
+    }))
     const { error } = await supabase.from('inspection_units').insert(payload)
     setMessage(error ? error.message : `Import unit berhasil: ${payload.length} baris.`)
     if (!error){ setPreview([]); load() }
@@ -737,7 +758,15 @@ function MasterParkings({ profile, context }){
   function edit(r){ setEditing(r.id); setForm({ site_id:r.site_id, parking_code:r.parking_code, parking_name:r.parking_name, location:r.location || '', capacity:r.capacity || '', status:r.status || 'Aktif' }); window.scrollTo({ top:0, behavior:'smooth' }) }
   async function save(e){
     e.preventDefault(); setMessage('')
-    const payload = { site_id: adminHO ? form.site_id : context.site_id, parking_name: clean(form.parking_name), location: clean(form.location), capacity: form.capacity ? Number(form.capacity) : null, status: form.status || 'Aktif', created_by: profile.id }
+    const payload = {
+      site_id: adminHO ? form.site_id : context.site_id,
+      parking_name: clean(form.parking_name),
+      location: clean(form.location),
+      capacity: form.capacity ? Number(form.capacity) : null,
+      status: form.status || 'Aktif',
+      created_by: profile.id
+    }
+    if (!editing) payload.parking_code = generatedRecordCode('PARK')
     const res = editing ? await supabase.from('inspection_parkings').update(payload).eq('id', editing) : await supabase.from('inspection_parkings').insert(payload)
     setMessage(res.error ? res.error.message : editing ? 'Parkiran berhasil diupdate.' : 'Parkiran berhasil ditambahkan.')
     if (!res.error){ reset(); load() }
@@ -760,7 +789,15 @@ function MasterParkings({ profile, context }){
   async function submitImport(){
     const valid = preview.filter(r => !r.error)
     if (!valid.length) return setMessage('Tidak ada baris valid.')
-    const payload = valid.map(r => ({ site_id:r.site_id, parking_name:r.parking_name, location:r.location, capacity:r.capacity ? Number(r.capacity) : null, status:r.status, created_by:profile.id }))
+    const payload = valid.map(r => ({
+      site_id:r.site_id,
+      parking_code: generatedRecordCode('PARK'),
+      parking_name:r.parking_name,
+      location:r.location,
+      capacity:r.capacity ? Number(r.capacity) : null,
+      status:r.status,
+      created_by:profile.id
+    }))
     const { error } = await supabase.from('inspection_parkings').insert(payload)
     setMessage(error ? error.message : `Import parkiran berhasil: ${payload.length} baris.`)
     if (!error){ setPreview([]); load() }
@@ -798,7 +835,14 @@ function ParameterChecklist(){
   function edit(r){ setEditing(r.id); setForm({ category:r.category, parameter_code:r.parameter_code || '', parameter_name:r.parameter_name, description:r.description || '', severity:r.severity || 'Medium', status:r.status || 'Aktif' }); window.scrollTo({ top:0, behavior:'smooth' }) }
   async function save(e){
     e.preventDefault(); setMessage('')
-    const payload = { category:form.category, parameter_name: clean(form.parameter_name), description: clean(form.description), severity: form.severity || 'Medium', status: form.status || 'Aktif' }
+    const payload = {
+      category:form.category,
+      parameter_name: clean(form.parameter_name),
+      description: clean(form.description),
+      severity: form.severity || 'Medium',
+      status: form.status || 'Aktif'
+    }
+    if (!editing) payload.parameter_code = generatedRecordCode(parameterPrefixByCategory(form.category))
     const res = editing ? await supabase.from('inspection_parameters').update(payload).eq('id', editing) : await supabase.from('inspection_parameters').insert(payload)
     setMessage(res.error ? res.error.message : editing ? 'Parameter berhasil diupdate.' : 'Parameter berhasil ditambahkan.')
     if (!res.error){ reset(); load() }
@@ -816,7 +860,10 @@ function ParameterChecklist(){
     }))
   }
   async function submitImport(){
-    const valid = preview.filter(r => !r.error).map(({row,error,parameter_code,...r}) => r)
+    const valid = preview.filter(r => !r.error).map(({row,error,parameter_code,...r}) => ({
+      ...r,
+      parameter_code: generatedRecordCode(parameterPrefixByCategory(r.category))
+    }))
     if (!valid.length) return setMessage('Tidak ada baris valid.')
     const { error } = await supabase.from('inspection_parameters').insert(valid)
     setMessage(error ? error.message : `Import parameter berhasil: ${valid.length} baris.`)
