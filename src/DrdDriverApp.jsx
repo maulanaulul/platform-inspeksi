@@ -267,6 +267,14 @@ function DashboardDateFilter({ dateFrom, dateTo, setDateFrom, setDateTo, onClear
   </Panel>
 }
 
+
+const HIDDEN_DASHBOARD_SITE_CODES = new Set(['JIEP'])
+function isHiddenDashboardSiteCode(code){ return HIDDEN_DASHBOARD_SITE_CODES.has(String(code || '').trim().toUpperCase()) }
+function isVisibleDashboardSite(site){ return !isHiddenDashboardSiteCode(site?.site_code) }
+function isVisibleDashboardDriver(driver){ return !isHiddenDashboardSiteCode(driver?.sites?.site_code) }
+function isVisibleDashboardAttempt(row){ return !isHiddenDashboardSiteCode(row?.drivers?.sites?.site_code) }
+function isVisibleDashboardPeriod(row){ return !isHiddenDashboardSiteCode(row?.drivers?.sites?.site_code) }
+
 function Dashboard({work}){
   const [drivers,setDrivers]=useState([]), [attempts,setAttempts]=useState([]), [periods,setPeriods]=useState([]), [sites,setSites]=useState([])
   const [dateFrom,setDateFrom]=useState(''), [dateTo,setDateTo]=useState(''), [siteFilter,setSiteFilter]=useState('')
@@ -282,9 +290,14 @@ function Dashboard({work}){
       fetchAllPages(buildPeriods),
       admin ? fetchAllPages(()=>supabase.from('sites').select('id,site_code,site_name').order('site_code')) : Promise.resolve([])
     ])
-    const scopedAttempts=(a||[]).filter(r=>admin ? (!siteFilter || r.drivers?.site_id===siteFilter) : r.drivers?.site_id===work.site_id)
-    const scopedPeriods=(p||[]).filter(r=>admin ? (!siteFilter || r.drivers?.site_id===siteFilter) : r.drivers?.site_id===work.site_id)
-    setDrivers(d||[]); setAttempts(scopedAttempts); setPeriods(scopedPeriods); if(admin) setSites(s||[])
+    const visibleDrivers=(d||[]).filter(isVisibleDashboardDriver)
+    const scopedAttempts=(a||[])
+      .filter(r=>admin ? (!siteFilter || r.drivers?.site_id===siteFilter) : r.drivers?.site_id===work.site_id)
+      .filter(isVisibleDashboardAttempt)
+    const scopedPeriods=(p||[])
+      .filter(r=>admin ? (!siteFilter || r.drivers?.site_id===siteFilter) : r.drivers?.site_id===work.site_id)
+      .filter(isVisibleDashboardPeriod)
+    setDrivers(visibleDrivers); setAttempts(scopedAttempts); setPeriods(scopedPeriods); if(admin) setSites((s||[]).filter(isVisibleDashboardSite))
   }
   const latestDrd=new Map()
   attempts.filter(a=>(a.test_type||'DRD')==='DRD').forEach(a=>{ if(!latestDrd.has(a.driver_id)) latestDrd.set(a.driver_id,a) })
@@ -336,8 +349,9 @@ function Dashboard({work}){
     x.belum_selesai=Math.max(target-x.closed_induksi,0)
     x.achievement_induksi=target?Math.round(x.closed_induksi/target*100):100
   })
-  const siteRows=Object.values(bySite).sort((a,b)=>b.achievement-a.achievement)
-  const inductionSiteRows=Object.values(bySiteInduksi).sort((a,b)=>b.achievement_induksi-a.achievement_induksi || String(a.site).localeCompare(String(b.site)))
+  const sortBySiteCode=(a,b)=>String(a.site || '').localeCompare(String(b.site || ''), 'id', { numeric:true, sensitivity:'base' })
+  const siteRows=Object.values(bySite).sort(sortBySiteCode)
+  const inductionSiteRows=Object.values(bySiteInduksi).sort(sortBySiteCode)
   const driverDrdRows=drivers.map(d=>{ const a=latestDrd.get(d.id); const valid=a?.status==='Lulus' && (!a.valid_until || a.valid_until>=today()); return {site:d.sites?.site_code||'-', nama_driver:d.nama_driver, nrp_driver:d.nrp_driver, email:d.email||'-', vendor:d.vendors?.vendor_name||'-', status_drd:valid?'Sudah DRD':'Belum DRD', nilai:a?.score ?? '-', tanggal_test:a?.submitted_at ? String(a.submitted_at).slice(0,10) : '-', valid_until:a?.valid_until||'-'} })
   const sudahDrdRows=driverDrdRows.filter(r=>r.status_drd==='Sudah DRD').sort((a,b)=>String(a.site).localeCompare(String(b.site))||String(a.nama_driver).localeCompare(String(b.nama_driver)))
   const belumDrdRows=driverDrdRows.filter(r=>r.status_drd==='Belum DRD').sort((a,b)=>String(a.site).localeCompare(String(b.site))||String(a.nama_driver).localeCompare(String(b.nama_driver)))

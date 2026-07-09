@@ -442,11 +442,27 @@ function InspeksiPage({ page, profile, context }){
 }
 
 
-function DashboardDateFilter({ dateFrom, dateTo, setDateFrom, setDateTo, onClear }) {
-  return <Panel title="Filter Tanggal Dashboard" desc="KPI, achievement, chart, dan row data dashboard mengikuti rentang tanggal ini.">
+
+const DASHBOARD_V52_INLINE_CSS = `
+/* V52 dashboard emergency layout guard. This keeps the dashboard neat even when styles.css was not copied during deploy. */
+.dashboard-redesign{display:grid!important;gap:22px!important;width:100%!important;align-items:start!important}.dashboard-redesign *{box-sizing:border-box!important}.dashboard-hero-panel{position:relative!important;overflow:hidden!important;display:grid!important;grid-template-columns:1fr!important;gap:18px!important;align-items:stretch!important;background:linear-gradient(135deg,#071a3f,#123c98 55%,#2563eb)!important;border:1px solid rgba(255,255,255,.22)!important;border-radius:32px!important;padding:30px!important;box-shadow:0 28px 80px rgba(15,23,42,.18)!important;color:#fff!important}.dashboard-hero-panel:before{content:''!important;position:absolute!important;inset:-80px -80px auto auto!important;width:260px!important;height:260px!important;border-radius:999px!important;background:rgba(255,255,255,.14)!important}.dashboard-hero-panel:after{content:''!important;position:absolute!important;left:-120px!important;bottom:-140px!important;width:300px!important;height:300px!important;border-radius:999px!important;background:rgba(96,165,250,.18)!important}.hero-copy,.hero-score-card{position:relative!important;z-index:1!important}.hero-eyebrow{display:inline-flex!important;align-items:center!important;border:1px solid rgba(255,255,255,.22)!important;background:rgba(255,255,255,.12)!important;color:#dbeafe!important;border-radius:999px!important;padding:8px 12px!important;font-size:12px!important;font-weight:950!important;text-transform:uppercase!important;letter-spacing:.1em!important}.hero-copy h2{margin:14px 0 12px!important;font-size:36px!important;line-height:1.08!important;letter-spacing:-.045em!important;color:#fff!important}.hero-copy p{margin:0!important;max-width:820px!important;color:#dbeafe!important;font-size:16px!important;line-height:1.6!important}.hero-score-card{background:rgba(255,255,255,.14)!important;border:1px solid rgba(255,255,255,.18)!important;border-radius:26px!important;padding:22px!important;box-shadow:inset 0 1px 0 rgba(255,255,255,.12)!important;backdrop-filter:blur(8px)!important}.hero-score-card small{color:#dbeafe!important;font-weight:900!important}.hero-score-card strong{display:block!important;font-size:56px!important;line-height:1!important;margin:10px 0!important;color:#fff!important;letter-spacing:-.05em!important}.hero-score-card p{color:#dbeafe!important;margin:12px 0 0!important}.hero-bar{height:15px!important;background:rgba(255,255,255,.24)!important}.hero-bar span{background:#fff!important}.executive-kpi-grid{display:grid!important;grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:18px!important}.executive-kpi-grid .kpi{background:linear-gradient(180deg,#fff,#f8fbff)!important;border-color:#e4edfa!important}.dashboard-category-grid{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:20px!important}.category-dashboard-card{position:relative!important;overflow:hidden!important;background:#fff!important;border:1px solid #e4edfa!important;border-radius:30px!important;padding:24px!important;box-shadow:0 18px 48px rgba(15,23,42,.07)!important;min-width:0!important}.category-dashboard-card:before{content:''!important;position:absolute!important;right:-42px!important;top:-42px!important;width:150px!important;height:150px!important;border-radius:999px!important;background:#eff6ff!important}.category-dashboard-card.pm:before{background:#dbeafe!important}.category-dashboard-card.unit:before{background:#dcfce7!important}.category-dashboard-card.parking:before{background:#ede9fe!important}.category-card-head{position:relative!important;z-index:1!important;display:flex!important;align-items:center!important;gap:14px!important;margin-bottom:12px!important}.category-card-head small{display:block!important;text-transform:uppercase!important;letter-spacing:.08em!important;font-size:11px!important;font-weight:950!important;color:#64748b!important}.category-card-head h3{margin:2px 0 0!important;font-size:24px!important;letter-spacing:-.035em!important}.category-card-head .pill,.category-card-head .badge{margin-left:auto!important;white-space:nowrap!important}.category-icon{width:54px!important;height:54px!important;min-width:54px!important;border-radius:18px!important;display:grid!important;place-items:center!important;background:#eff6ff!important;color:#2563eb!important;box-shadow:0 12px 32px rgba(37,99,235,.14)!important}.category-icon svg{width:24px!important;height:24px!important}.category-dashboard-card.unit .category-icon,.category-icon.unit{background:#ecfdf5!important;color:#16a34a!important}.category-dashboard-card.parking .category-icon,.category-icon.parking{background:#f5f3ff!important;color:#7c3aed!important}.category-dashboard-card.pm .category-icon,.category-icon.pm{background:#eff6ff!important;color:#2563eb!important}.category-dashboard-card p{position:relative!important;z-index:1!important;color:#64748b!important;margin:0 0 18px!important;min-height:50px!important;line-height:1.55!important}.category-main-metric{position:relative!important;z-index:1!important;background:#f8fbff!important;border:1px solid #e5eefb!important;border-radius:22px!important;padding:16px!important;margin-bottom:16px!important}.category-main-metric small,.mini-metric small{display:block!important;color:#64748b!important;font-weight:900!important}.category-main-metric strong{display:block!important;font-size:36px!important;letter-spacing:-.04em!important;margin:4px 0 10px!important;color:#061027!important}.category-metric-grid{position:relative!important;z-index:1!important;display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:10px!important}.mini-metric{background:#fff!important;border:1px solid #e8eff9!important;border-radius:17px!important;padding:12px!important;min-width:0!important}.mini-metric b{display:block!important;font-size:22px!important;letter-spacing:-.03em!important;margin-top:4px!important;color:#061027!important}.category-comparison-grid{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:16px!important;margin-bottom:18px!important}.category-progress-card{background:linear-gradient(180deg,#fff,#f8fbff)!important;border:1px solid #e4edfa!important;border-radius:24px!important;padding:16px!important;box-shadow:0 12px 30px rgba(15,23,42,.05)!important}.category-progress-top{display:grid!important;grid-template-columns:54px 1fr auto!important;gap:12px!important;align-items:center!important;margin-bottom:14px!important}.category-progress-top b{display:block!important;color:#061027!important}.category-progress-top small{display:block!important;margin-top:3px!important;color:#64748b!important}.category-progress-top strong{font-size:26px!important;letter-spacing:-.04em!important;color:#061027!important}.progress-foot{display:flex!important;gap:8px!important;flex-wrap:wrap!important;margin-top:12px!important}.progress-foot span{background:#eef4ff!important;border:1px solid #dbeafe!important;border-radius:999px!important;padding:7px 10px!important;font-size:12px!important;font-weight:900!important;color:#334155!important}.site-category-board{display:grid!important;grid-template-columns:repeat(auto-fit,minmax(320px,1fr))!important;gap:14px!important;margin-bottom:18px!important}.site-category-card{background:#fff!important;border:1px solid #e4edfa!important;border-radius:24px!important;padding:16px!important;box-shadow:0 12px 30px rgba(15,23,42,.04)!important}.site-category-card>div:first-child{display:flex!important;justify-content:space-between!important;gap:10px!important;align-items:flex-start!important;margin-bottom:12px!important}.site-category-card b{font-size:16px!important;color:#061027!important}.site-category-card small{max-width:190px!important;text-align:right!important;color:#64748b!important}.mini-progress-list{display:grid!important;gap:10px!important}.mini-progress-row{display:grid!important;grid-template-columns:62px minmax(0,1fr) 100px!important;gap:10px!important;align-items:center!important}.mini-progress-row span{font-size:12px!important;font-weight:950!important;color:#475569!important}.mini-progress-row .bar{height:10px!important}.mini-progress-row b{font-size:12px!important;text-align:right!important;color:#0f172a!important}.dashboard-redesign .grid-2{align-items:start!important}.dashboard-redesign .grid-2 .panel{min-width:0!important}.dashboard-redesign .bar{height:13px!important;background:#e2e8f0!important;border-radius:999px!important;overflow:hidden!important}.dashboard-redesign .bar span{height:100%!important;display:block!important;background:linear-gradient(90deg,#2563eb,#7c3aed)!important;border-radius:999px!important}.dashboard-redesign .summary-strip{display:flex!important;gap:12px!important;flex-wrap:wrap!important;margin:10px 0 18px!important}.dashboard-redesign .summary-strip span{background:#eef4ff!important;border:1px solid #dbeafe!important;border-radius:16px!important;padding:12px 16px!important;color:#0f172a!important;font-weight:800!important}.dashboard-redesign .site-chart{display:grid!important;gap:14px!important;margin-bottom:18px!important}.dashboard-redesign .site-bar{display:grid!important;grid-template-columns:200px 1fr!important;gap:14px!important;align-items:center!important;background:#f8fbff!important;border:1px solid #dbeafe!important;border-radius:18px!important;padding:14px!important}.dashboard-redesign .site-meta b{display:block!important;color:#061027!important}.dashboard-redesign .site-meta span{display:block!important;color:#64748b!important;font-size:12px!important;margin-top:4px!important}@media(max-width:1180px){.dashboard-hero-panel,.dashboard-category-grid,.category-comparison-grid{grid-template-columns:1fr!important}.executive-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}.hero-copy h2{font-size:30px!important}.hero-score-card strong{font-size:44px!important}.site-category-board{grid-template-columns:1fr!important}}@media(max-width:640px){.dashboard-hero-panel{padding:20px!important;border-radius:24px!important}.executive-kpi-grid{grid-template-columns:1fr!important}.category-dashboard-card{padding:18px!important;border-radius:24px!important}.category-metric-grid,.mini-progress-row{grid-template-columns:1fr!important}.mini-progress-row b{text-align:left!important}.site-category-card small{text-align:left!important}.category-progress-top{grid-template-columns:44px 1fr!important}.category-progress-top strong{grid-column:1/-1!important}.category-icon{width:44px!important;height:44px!important;min-width:44px!important;border-radius:15px!important}.dashboard-redesign .site-bar{grid-template-columns:1fr!important}}
+`
+
+function DashboardV52Styles(){
+  return <style data-dashboard-v52>{DASHBOARD_V52_INLINE_CSS}</style>
+}
+
+function DashboardDateFilter({ dateFrom, dateTo, setDateFrom, setDateTo, siteFilter, setSiteFilter, sites, canChooseSite, onClear }) {
+  return <Panel title="Filter Dashboard" desc="Pilih tanggal dan site sesuai kebutuhan.">
     <div className="form-grid">
       <label>Dari Tanggal<input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} /></label>
       <label>Sampai Tanggal<input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} /></label>
+      <label>Site
+        <select value={siteFilter} onChange={e=>setSiteFilter(e.target.value)} disabled={!canChooseSite}>
+          {canChooseSite && <option value="">Semua Site</option>}
+          {sites.map(s => <option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}
+        </select>
+      </label>
       <button type="button" className="secondary" onClick={onClear}>Reset Filter</button>
     </div>
   </Panel>
@@ -462,8 +478,10 @@ function Dashboard({ context }){
   const [findings, setFindings] = useState([])
   const [sites, setSites] = useState([])
   const [units, setUnits] = useState([])
+  const [siteFilter, setSiteFilter] = useState(isHeadOfficeAdmin(context) ? '' : (context.site_id || ''))
   const [error, setError] = useState('')
 
+  useEffect(() => { setSiteFilter(isHeadOfficeAdmin(context) ? '' : (context.site_id || '')) }, [context.id, context.site_id])
   useEffect(() => { load() }, [context.id, dateFrom, dateTo])
   async function load(){
     setLoading(true); setError('')
@@ -500,28 +518,136 @@ function Dashboard({ context }){
     }
   }
 
-  const waitingApproval = records.filter(r => r.status === 'Submitted').length
-  const openFindings = findings.filter(f => f.status === 'Open').length
-  const closeRequested = findings.filter(f => f.status === 'Close Requested').length
-  const closedFindings = findings.filter(f => f.status === 'Closed').length
-  const approvedPlans = plans.filter(p => p.status === 'Approved').length
-  const siteRows = sites.map(s => {
-    const sitePlans = plans.filter(p => p.site_id === s.id)
-    const done = sitePlans.filter(p => p.status === 'Approved').length
-    const total = sitePlans.length
-    return { site: s.site_code, site_name: s.site_name, total_plan: total, approved: done, belum: Math.max(total - done, 0), achievement: total ? Math.round(done / total * 100) : 0 }
+  const calcPercent = (done, target) => target ? Math.round((done / target) * 100) : 0
+  const canChooseSite = isHeadOfficeAdmin(context)
+  const effectiveSiteId = canChooseSite ? siteFilter : (context.site_id || '')
+  const dashboardSites = [...(effectiveSiteId ? sites.filter(s => s.id === effectiveSiteId) : sites)]
+    .sort((a,b)=>String(a.site_code || a.site_name || '').localeCompare(String(b.site_code || b.site_name || ''), 'id', { numeric:true, sensitivity:'base' }))
+  const dashboardPlans = effectiveSiteId ? plans.filter(p => p.site_id === effectiveSiteId) : plans
+  const dashboardRecords = effectiveSiteId ? records.filter(r => r.site_id === effectiveSiteId) : records
+  const dashboardFindings = effectiveSiteId ? findings.filter(f => f.site_id === effectiveSiteId) : findings
+  const dashboardUnits = effectiveSiteId ? units.filter(u => u.site_id === effectiveSiteId) : units
+
+  const waitingApproval = dashboardRecords.filter(r => r.status === 'Submitted').length
+  const openFindings = dashboardFindings.filter(f => f.status === 'Open').length
+  const closeRequested = dashboardFindings.filter(f => f.status === 'Close Requested').length
+  const closedFindings = dashboardFindings.filter(f => f.status === 'Closed').length
+  const approvedPlans = dashboardPlans.filter(p => p.status === 'Approved').length
+  const rejectedPlans = dashboardPlans.filter(p => p.status === 'Rejected').length
+
+  const categoryDefs = [
+    {
+      key:'PM Check',
+      short:'PM Check',
+      title:'PM Check',
+      tone:'pm',
+      icon:<Truck size={24}/> ,
+      desc:'Target 2 kali PM Check per unit aktif.',
+      targetLabel:'Target PM/Bulan',
+      targetValue:dashboardUnits.length * 2
+    },
+    {
+      key:'Inspeksi Unit',
+      short:'Unit',
+      title:'Inspeksi Unit',
+      tone:'unit',
+      icon:<Building2 size={24}/> ,
+      desc:'Plan, hasil inspeksi, approval, dan temuan unit.',
+      targetLabel:'Total Plan Unit',
+      targetValue:null
+    },
+    {
+      key:'Inspeksi Kelayakan Parkiran',
+      short:'Parkiran',
+      title:'Inspeksi Parkiran',
+      tone:'parking',
+      icon:<ParkingCircle size={24}/> ,
+      desc:'Plan, hasil inspeksi, approval, dan temuan parkiran.',
+      targetLabel:'Total Plan Parkiran',
+      targetValue:null
+    }
+  ]
+
+  const categoryStats = categoryDefs.map(def => {
+    const catPlans = dashboardPlans.filter(p => p.category === def.key)
+    const catRecords = dashboardRecords.filter(r => r.category === def.key)
+    const catFindings = dashboardFindings.filter(f => f.category === def.key)
+    const planApproved = catPlans.filter(p => p.status === 'Approved').length
+    const planSubmitted = catPlans.filter(p => p.status === 'Submitted').length
+    const recordSubmitted = catRecords.filter(r => r.status === 'Submitted').length
+    const target = def.targetValue === null ? catPlans.length : Math.max(def.targetValue, catPlans.length)
+    const achievement = calcPercent(planApproved, target)
+    return {
+      ...def,
+      total_plan:catPlans.length,
+      approved:planApproved,
+      submitted:planSubmitted + recordSubmitted,
+      rejected:catPlans.filter(p => p.status === 'Rejected').length,
+      target,
+      achievement,
+      aman:catRecords.filter(r => r.result === 'Aman').length,
+      tidak_aman:catRecords.filter(r => r.result === 'Tidak Aman').length,
+      temuan_open:catFindings.filter(f => f.status === 'Open').length,
+      close_request:catFindings.filter(f => f.status === 'Close Requested').length,
+      temuan_closed:catFindings.filter(f => f.status === 'Closed').length
+    }
   })
-  const pmPlans = plans.filter(p => p.category === 'PM Check')
+
+  const pmPlans = dashboardPlans.filter(p => p.category === 'PM Check')
   const pmApproved = pmPlans.filter(p => p.status === 'Approved').length
-  const pmUnitTarget = units.length * 2
-  const pmAchievement = pmUnitTarget ? Math.round(pmApproved / pmUnitTarget * 100) : 0
-  const pmRows = sites.map(s => {
-    const siteUnits = units.filter(u => u.site_id === s.id).length
+  const pmUnitTarget = dashboardUnits.length * 2
+  const pmAchievement = calcPercent(pmApproved, pmUnitTarget)
+  const pmRows = dashboardSites.map(s => {
+    const siteUnits = dashboardUnits.filter(u => u.site_id === s.id).length
     const target = siteUnits * 2
     const actual = pmPlans.filter(p => p.site_id === s.id && p.status === 'Approved').length
-    return { site:s.site_code, unit_aktif:siteUnits, target_pm_bulanan:target, pm_approved:actual, belum_pm:Math.max(target-actual,0), achievement:target ? Math.round(actual/target*100) : 0 }
+    return { site:s.site_code, site_name:s.site_name, unit_aktif:siteUnits, target_pm_bulanan:target, pm_approved:actual, belum_pm:Math.max(target-actual,0), achievement:`${calcPercent(actual,target)}%` }
   })
-  const inspectionRows = records.map(r => ({
+
+  const categoryRows = categoryStats.map(c => ({
+    kategori:c.title,
+    target:c.target,
+    total_plan:c.total_plan,
+    approved:c.approved,
+    menunggu_approval:c.submitted,
+    rejected:c.rejected,
+    aman:c.aman,
+    tidak_aman:c.tidak_aman,
+    temuan_open:c.temuan_open,
+    close_request:c.close_request,
+    temuan_closed:c.temuan_closed,
+    achievement:`${c.achievement}%`
+  }))
+
+  const makeDetailRows = (categoryKey) => dashboardSites.map(s => {
+    const catPlans = dashboardPlans.filter(p => p.site_id === s.id && p.category === categoryKey)
+    const catRecords = dashboardRecords.filter(r => r.site_id === s.id && r.category === categoryKey)
+    const catFindings = dashboardFindings.filter(f => f.site_id === s.id && f.category === categoryKey)
+    const approved = catPlans.filter(p => p.status === 'Approved').length
+    const waiting = catRecords.filter(r => r.status === 'Submitted').length + catPlans.filter(p => p.status === 'Submitted').length
+    const total = catPlans.length
+    return {
+      site:s.site_code,
+      site_name:s.site_name,
+      total_plan:total,
+      approved,
+      menunggu_approval:waiting,
+      rejected:catPlans.filter(p => p.status === 'Rejected').length,
+      aman:catRecords.filter(r => r.result === 'Aman').length,
+      tidak_aman:catRecords.filter(r => r.result === 'Tidak Aman').length,
+      temuan_open:catFindings.filter(f => f.status === 'Open').length,
+      close_request:catFindings.filter(f => f.status === 'Close Requested').length,
+      temuan_closed:catFindings.filter(f => f.status === 'Closed').length,
+      achievement:`${calcPercent(approved,total)}%`
+    }
+  })
+
+  const unitRows = makeDetailRows('Inspeksi Unit')
+  const parkingRows = makeDetailRows('Inspeksi Kelayakan Parkiran')
+  const unitStats = categoryStats.find(c => c.key === 'Inspeksi Unit') || {}
+  const parkingStats = categoryStats.find(c => c.key === 'Inspeksi Kelayakan Parkiran') || {}
+
+  const inspectionRows = dashboardRecords.map(r => ({
     tanggal: r.inspected_at ? new Date(r.inspected_at).toLocaleString('id-ID') : '-',
     site: r.sites?.site_code,
     kategori: r.category,
@@ -530,7 +656,7 @@ function Dashboard({ context }){
     status: r.status,
     catatan: r.notes || '-'
   }))
-  const findingRows = findings.map(f => ({
+  const findingRows = dashboardFindings.map(f => ({
     created: f.created_at ? new Date(f.created_at).toLocaleDateString('id-ID') : '-',
     site: f.sites?.site_code,
     kategori: f.category,
@@ -543,47 +669,150 @@ function Dashboard({ context }){
 
   if (loading) return <Panel title="Dashboard"><p className="muted">Memuat dashboard...</p></Panel>
   if (error) return <Panel title="Dashboard"><div className="error">{error}</div><button onClick={load}>Coba Lagi</button></Panel>
-  return <div className="stack">
-    <DashboardDateFilter dateFrom={dateFrom} dateTo={dateTo} setDateFrom={setDateFrom} setDateTo={setDateTo} onClear={()=>{setDateFrom('');setDateTo('')}} />
-    <div className="kpi-grid">
-      <Kpi title="Total Plan" value={plans.length} icon={<CalendarCheck/>} />
+  return <div className="stack dashboard-redesign">
+    <DashboardV52Styles />
+    <DashboardDateFilter
+      dateFrom={dateFrom}
+      dateTo={dateTo}
+      setDateFrom={setDateFrom}
+      setDateTo={setDateTo}
+      siteFilter={effectiveSiteId}
+      setSiteFilter={setSiteFilter}
+      sites={sites}
+      canChooseSite={canChooseSite}
+      onClear={()=>{ setDateFrom(''); setDateTo(''); if (canChooseSite) setSiteFilter('') }}
+    />
+
+    <section className="dashboard-hero-panel">
+      <div className="hero-copy">
+        <span className="hero-eyebrow">Dashboard Inspeksi</span>
+        <h2>Dashboard Inspeksi Unit, Inspeksi Parkiran, dan PM Check</h2>
+        <p>Ringkasan plan, approval, achievement, dan temuan.</p>
+      </div>
+    </section>
+
+    <div className="kpi-grid executive-kpi-grid">
+      <Kpi title="Total Plan" value={dashboardPlans.length} icon={<CalendarCheck/>} />
       <Kpi title="Plan Approved" value={approvedPlans} icon={<CheckCircle2/>} />
       <Kpi title="Menunggu Approval" value={waitingApproval} icon={<Eye/>} />
       <Kpi title="Temuan Open" value={openFindings} icon={<AlertTriangle/>} />
       <Kpi title="Close Request" value={closeRequested} icon={<ClipboardCheck/>} />
       <Kpi title="Temuan Closed" value={closedFindings} icon={<Check/>} />
+      <Kpi title="Plan Rejected" value={rejectedPlans} icon={<XCircle/>} />
       <Kpi title="Target PM Check" value={pmUnitTarget} icon={<Truck/>} />
-      <Kpi title="Achievement PM" value={`${pmAchievement}%`} icon={<BarChart3/>} />
     </div>
 
+    <div className="dashboard-category-grid">
+      {categoryStats.map(item => <CategoryDashboardCard key={item.key} item={item} />)}
+    </div>
+
+    <Panel title="Achievement per Kategori" desc="Ringkasan utama untuk PM Check, Inspeksi Unit, dan Inspeksi Parkiran." action={<button onClick={()=>downloadXlsx('resume-dashboard-inspeksi-per-kategori.xlsx', categoryRows)}><Download size={16}/> Export Excel</button>}>
+      <div className="category-comparison-grid">
+        {categoryStats.map(item => <CategoryProgress key={item.key} item={item} />)}
+      </div>
+      <DataTable rows={categoryRows}/>
+    </Panel>
+
+
     <Panel title="Dashboard PM Check" desc="Pencapaian PM Check dihitung dari target 2 kali PM Check per unit aktif setiap bulan." action={<button onClick={()=>downloadXlsx('dashboard-pm-check.xlsx', pmRows)}><Download size={16}/> Export Excel</button>}>
-      <div className="summary-strip"><span><b>{units.length}</b> Unit Aktif</span><span><b>{pmUnitTarget}</b> Target PM/Bulan</span><span><b>{pmApproved}</b> PM Approved</span><span><b>{pmAchievement}%</b> Achievement PM</span></div>
+      <div className="summary-strip"><span><b>{dashboardUnits.length}</b> Unit Aktif</span><span><b>{pmUnitTarget}</b> Target PM/Bulan</span><span><b>{pmApproved}</b> PM Approved</span><span><b>{pmAchievement}%</b> Achievement PM</span></div>
       <div className="site-chart">
         {pmRows.map(r => <div className="site-bar" key={r.site}>
-          <div className="site-meta"><b>{r.site}</b><span>{r.pm_approved}/{r.target_pm_bulanan} · {r.achievement}%</span></div>
-          <div className="bar"><span style={{ width: `${Math.min(r.achievement, 100)}%` }} /></div>
+          <div className="site-meta"><b>{r.site}</b><span>{r.pm_approved}/{r.target_pm_bulanan} · {r.achievement}</span></div>
+          <div className="bar"><span style={{ width: `${Math.min(parseInt(r.achievement) || 0, 100)}%` }} /></div>
         </div>)}
         {!pmRows.length && <p className="muted">Belum ada data PM Check.</p>}
       </div>
       <DataTable rows={pmRows}/>
     </Panel>
-    <Panel title="Achievement All Site" desc="Pencapaian dihitung dari total plan inspeksi yang sudah approved. Site JIEP/Head Office tidak masuk hitungan achievement." action={<button onClick={()=>downloadXlsx('achievement-inspeksi-all-site.xlsx', siteRows)}><Download size={16}/> Export Excel</button>}>
-      <div className="site-chart">
-        {siteRows.map(r => <div className="site-bar" key={r.site}>
-          <div className="site-meta"><b>{r.site}</b><span>{r.approved}/{r.total_plan} · {r.achievement}%</span></div>
-          <div className="bar"><span style={{ width: `${Math.min(r.achievement, 100)}%` }} /></div>
-        </div>)}
-        {!siteRows.length && <p className="muted">Belum ada data site.</p>}
+
+    <div className="grid-2">
+      <Panel title="Dashboard Inspeksi Unit" desc="Detail pencapaian inspeksi unit per site." action={<button onClick={()=>downloadXlsx('dashboard-inspeksi-unit.xlsx', unitRows)}><Download size={16}/> Export Excel</button>}>
+        <div className="summary-strip"><span><b>{unitStats.total_plan || 0}</b> Total Plan</span><span><b>{unitStats.approved || 0}</b> Approved</span><span><b>{unitStats.achievement || 0}%</b> Achievement</span><span><b>{unitStats.temuan_open || 0}</b> Temuan Open</span></div>
+        <div className="site-chart">
+          {unitRows.map(r => <div className="site-bar" key={r.site}>
+            <div className="site-meta"><b>{r.site}</b><span>{r.approved}/{r.total_plan} · {r.achievement}</span></div>
+            <div className="bar"><span style={{ width: `${Math.min(parseInt(r.achievement) || 0, 100)}%` }} /></div>
+          </div>)}
+          {!unitRows.length && <p className="muted">Belum ada data inspeksi unit.</p>}
+        </div>
+        <DataTable rows={unitRows}/>
+      </Panel>
+
+      <Panel title="Dashboard Inspeksi Parkiran" desc="Detail pencapaian inspeksi parkiran per site." action={<button onClick={()=>downloadXlsx('dashboard-inspeksi-parkiran.xlsx', parkingRows)}><Download size={16}/> Export Excel</button>}>
+        <div className="summary-strip"><span><b>{parkingStats.total_plan || 0}</b> Total Plan</span><span><b>{parkingStats.approved || 0}</b> Approved</span><span><b>{parkingStats.achievement || 0}%</b> Achievement</span><span><b>{parkingStats.temuan_open || 0}</b> Temuan Open</span></div>
+        <div className="site-chart">
+          {parkingRows.map(r => <div className="site-bar" key={r.site}>
+            <div className="site-meta"><b>{r.site}</b><span>{r.approved}/{r.total_plan} · {r.achievement}</span></div>
+            <div className="bar"><span style={{ width: `${Math.min(parseInt(r.achievement) || 0, 100)}%` }} /></div>
+          </div>)}
+          {!parkingRows.length && <p className="muted">Belum ada data inspeksi parkiran.</p>}
+        </div>
+        <DataTable rows={parkingRows}/>
+      </Panel>
+    </div>
+
+    <div className="grid-2">
+      <Panel title="Row Data Inspeksi" desc="Data mentah hasil inspeksi untuk audit dan export Excel." action={<button onClick={()=>downloadXlsx('row-data-inspeksi.xlsx', inspectionRows)}><Download size={16}/> Export Excel</button>}>
+        <DataTable rows={inspectionRows}/>
+      </Panel>
+      <Panel title="Row Data Temuan" desc="Seluruh temuan open, close requested, dan closed untuk monitoring tindak lanjut." action={<button onClick={()=>downloadXlsx('row-data-temuan-inspeksi.xlsx', findingRows)}><Download size={16}/> Export Excel</button>}>
+        <div className="summary-strip"><span><b>{openFindings}</b> Open</span><span><b>{closeRequested}</b> Close Requested</span><span><b>{closedFindings}</b> Closed</span></div>
+        <DataTable rows={findingRows}/>
+      </Panel>
+    </div>
+  </div>
+}
+
+function CategoryDashboardCard({ item }){
+  return <article className={`category-dashboard-card ${item.tone}`}>
+    <div className="category-card-head">
+      <div className="category-icon">{item.icon}</div>
+      <div>
+        <small>{item.short}</small>
+        <h3>{item.title}</h3>
       </div>
-      <DataTable rows={siteRows}/>
-    </Panel>
-    <Panel title="Row Data Inspeksi" desc="Tetap disediakan sebagai data mentah agar bisa diekspor Excel, bukan hanya persentase dashboard." action={<button onClick={()=>downloadXlsx('row-data-inspeksi.xlsx', inspectionRows)}><Download size={16}/> Export Excel</button>}>
-      <DataTable rows={inspectionRows}/>
-    </Panel>
-    <Panel title="Row Data Temuan Open & Closed" desc="Seluruh temuan open, close requested, dan closed untuk kebutuhan monitoring tindak lanjut." action={<button onClick={()=>downloadXlsx('row-data-temuan-inspeksi.xlsx', findingRows)}><Download size={16}/> Export Excel</button>}>
-      <div className="summary-strip"><span><b>{openFindings}</b> Open</span><span><b>{closeRequested}</b> Close Requested</span><span><b>{closedFindings}</b> Closed</span></div>
-      <DataTable rows={findingRows}/>
-    </Panel>
+      <StatusPill value={`${item.achievement}%`} />
+    </div>
+    <p>{item.desc}</p>
+    <div className="category-main-metric">
+      <div><small>Achievement</small><strong>{item.achievement}%</strong></div>
+      <div className="bar"><span style={{ width: `${Math.min(item.achievement, 100)}%` }} /></div>
+    </div>
+    <div className="category-metric-grid">
+      <MiniMetric label={item.targetLabel} value={item.target} />
+      <MiniMetric label="Total Plan" value={item.total_plan} />
+      <MiniMetric label="Approved" value={item.approved} />
+      <MiniMetric label="Menunggu" value={item.submitted} />
+      <MiniMetric label="Aman" value={item.aman} />
+      <MiniMetric label="Tidak Aman" value={item.tidak_aman} />
+      <MiniMetric label="Temuan Open" value={item.temuan_open} />
+      <MiniMetric label="Closed" value={item.temuan_closed} />
+    </div>
+  </article>
+}
+
+function CategoryProgress({ item }){
+  return <div className="category-progress-card">
+    <div className="category-progress-top">
+      <div className={`category-icon ${item.tone}`}>{item.icon}</div>
+      <div><b>{item.title}</b><small>{item.approved}/{item.target} approved</small></div>
+      <strong>{item.achievement}%</strong>
+    </div>
+    <div className="bar"><span style={{ width: `${Math.min(item.achievement, 100)}%` }} /></div>
+    <div className="progress-foot"><span>{item.total_plan} plan</span><span>{item.temuan_open} open finding</span><span>{item.close_request} close request</span></div>
+  </div>
+}
+
+function MiniMetric({ label, value }){
+  return <div className="mini-metric"><small>{label}</small><b>{value}</b></div>
+}
+
+function MiniProgress({ label, value, meta }){
+  return <div className="mini-progress-row">
+    <span>{label}</span>
+    <div className="bar"><span style={{ width: `${Math.min(value, 100)}%` }} /></div>
+    <b>{meta} · {value}%</b>
   </div>
 }
 
