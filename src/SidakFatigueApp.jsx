@@ -45,13 +45,59 @@ function downloadXlsx(filename, rows){
   XLSX.utils.book_append_sheet(wb, ws, 'Template')
   XLSX.writeFile(wb, filename.endsWith('.xlsx') ? filename : `${filename}.xlsx`)
 }
+function normalizeHeaderKey(key){
+  const raw = String(key || '').trim().toLowerCase()
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/[()]/g, '')
+    .replace(/[\s\-]+/g, '_')
+    .replace(/__+/g, '_')
+    .replace(/^_+|_+$/g, '')
+  const aliases = {
+    site: 'site_code',
+    kode_site: 'site_code',
+    sitecode: 'site_code',
+    site_code: 'site_code',
+    nama: 'nama_driver',
+    nama_driver: 'nama_driver',
+    driver: 'nama_driver',
+    driver_name: 'nama_driver',
+    name_driver: 'nama_driver',
+    nrp: 'nrp_driver',
+    nrp_driver: 'nrp_driver',
+    nrpdriver: 'nrp_driver',
+    no_nrp: 'nrp_driver',
+    email_driver: 'email',
+    vendor: 'vendor_name',
+    nama_vendor: 'vendor_name',
+    vendor_name: 'vendor_name',
+    mulai_dinas: 'mulai_dinas',
+    start_masa_dinas: 'mulai_dinas',
+    tanggal_mulai_dinas: 'mulai_dinas',
+    end_masa_dinas: 'end_masa_dinas',
+    akhir_masa_dinas: 'end_masa_dinas',
+    tanggal_akhir_dinas: 'end_masa_dinas',
+    bulan_plan: 'bulan',
+    bulan: 'bulan',
+    month: 'bulan',
+    tahun_plan: 'tahun',
+    tahun: 'tahun',
+    year: 'tahun'
+  }
+  return aliases[raw] || raw
+}
 function normalizeRow(row){
   const out = {}
-  Object.keys(row || {}).forEach(k => { out[String(k).trim()] = row[k] })
+  Object.keys(row || {}).forEach(k => {
+    const nk = normalizeHeaderKey(k)
+    out[nk] = row[k]
+  })
   return out
 }
-function cleanText(v){ return String(v ?? '').trim() }
+function cleanText(v){ return String(v ?? '').replace(/[\u200B-\u200D\uFEFF]/g, '').trim() }
 function normEmail(v){ return cleanText(v).toLowerCase() }
+function normCode(v){ return cleanText(v).toUpperCase() }
+function normNrp(v){ return cleanText(v).replace(/\s+/g, '').toUpperCase() }
+function sameNrp(a,b){ return normNrp(a) === normNrp(b) }
 function isValidEmail(v){ const e = normEmail(v); return !e || /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/.test(e) }
 function makeVendorCode(idx=0){ return `VEN-${Date.now().toString(36).toUpperCase()}-${String(idx+1).padStart(3,'0')}` }
 function excelDateToIso(v){
@@ -671,20 +717,23 @@ function DriverMaster({ context }) {
       const seenNrp=new Set(), seenEmail=new Set()
       const [{data:allSites},{data:allVendors}] = await Promise.all([supabase.from('sites').select('id,site_code'), supabase.from('vendors').select('id,vendor_name')])
       const mapped = rows.map((r,idx)=>{
-        const siteCode = adminHO ? cleanText(r.site_code).toUpperCase() : context.sites?.site_code
+        const siteCode = adminHO ? normCode(r.site_code) : context.sites?.site_code
         const vendorName = cleanText(r.vendor_name || r.vendor)
-        const site=(allSites||[]).find(s=>s.site_code===siteCode)
+        const site=(allSites||[]).find(s=>normCode(s.site_code)===siteCode)
         const vendor= vendorName ? (allVendors||[]).find(v=>cleanText(v.vendor_name).toLowerCase()===vendorName.toLowerCase()) : null
-        const nrpKey=cleanText(r.nrp_driver).toLowerCase(), emailKey=normEmail(r.email)
+        const nrpKey=normNrp(r.nrp_driver), emailKey=normEmail(r.email)
+        const looksLikePlanTemplate = r.bulan !== undefined || r.tahun !== undefined
         let error = ''
         if(!site) error = 'site_code tidak ditemukan'
-        else if(!cleanText(r.nama_driver) || !cleanText(r.nrp_driver)) error = 'nama_driver dan nrp_driver wajib'
+        else if(looksLikePlanTemplate && !cleanText(r.nama_driver)) error = 'File ini terlihat seperti template Plan Sidak. Upload file ini di menu Plan Sidak, bukan di Master Driver.'
+        else if(!cleanText(r.nama_driver)) error = 'nama_driver wajib'
+        else if(!nrpKey) error = 'nrp_driver wajib'
         else if(emailKey && !isValidEmail(emailKey)) error = 'email tidak valid'
         else if(seenNrp.has(nrpKey)) error='nrp_driver double di file import'
         else if(emailKey && seenEmail.has(emailKey)) error='email double di file import'
-        else if(drivers.some(d=>cleanText(d.nrp_driver).toLowerCase()===nrpKey)) error='nrp_driver sudah terdaftar'
+        else if(drivers.some(d=>sameNrp(d.nrp_driver, r.nrp_driver))) error='nrp_driver sudah terdaftar. Jika ingin membuat Plan Sidak, upload di menu Plan Sidak.'
         else if(emailKey && drivers.some(d=>normEmail(d.email)===emailKey)) error='email sudah terdaftar'
-        seenNrp.add(nrpKey); if(emailKey) seenEmail.add(emailKey)
+        if(nrpKey) seenNrp.add(nrpKey); if(emailKey) seenEmail.add(emailKey)
         return { row:idx+2, site_code:siteCode, nama_driver:cleanText(r.nama_driver), nrp_driver:cleanText(r.nrp_driver), email:emailKey, password:cleanText(r.password), vendor_name:vendor?.vendor_name||vendorName, mulai_dinas:excelDateToIso(r.mulai_dinas), end_masa_dinas:excelDateToIso(r.end_masa_dinas), status:cleanText(r.status)||'Aktif', site_id:site?.id, vendor_id:vendor?.id||null, error }
       })
       setPreview(mapped)
@@ -854,20 +903,26 @@ function FatiguePlans({ context, profile }) {
       const rows = (await parseExcelOrCsv(file)).map(normalizeRow)
       const [{ data: allSites }, { data: allDrivers }] = await Promise.all([
         supabase.from('sites').select('id,site_code'),
-        supabase.from('drivers').select('id,nrp_driver,site_id')
+        supabase.from('drivers').select('id,nama_driver,nrp_driver,site_id,status')
       ])
       const mapped = rows.map((r,idx)=>{
-        const siteCode = adminHO ? cleanText(r.site_code).toUpperCase() : context.sites?.site_code
-        const nrp = cleanText(r.nrp_driver)
-        const site = (allSites || []).find(s => s.site_code === siteCode)
-        const driver = (allDrivers || []).find(d => d.nrp_driver === nrp && (!site || d.site_id === site.id))
+        const siteCode = adminHO ? normCode(r.site_code) : context.sites?.site_code
+        const nrp = cleanText(r.nrp_driver || r.nrp)
+        const nrpKey = normNrp(nrp)
+        const site = (allSites || []).find(s => normCode(s.site_code) === siteCode)
+        const driverSameSite = (allDrivers || []).find(d => sameNrp(d.nrp_driver, nrp) && (!site || d.site_id === site.id))
+        const driverAnySite = (allDrivers || []).find(d => sameNrp(d.nrp_driver, nrp))
+        const driver = driverSameSite
         let error=''
         const bulan=Number(r.bulan), tahun=Number(r.tahun)
         if(!site) error='site_code tidak ditemukan'
-        else if(!driver) error='nrp_driver tidak ditemukan di site tersebut'
+        else if(!nrpKey) error='nrp_driver wajib'
+        else if(!driver && driverAnySite) error=`nrp_driver ditemukan, tetapi bukan di site ${siteCode}`
+        else if(!driver) error='nrp_driver tidak ditemukan di Master Driver site tersebut'
+        else if(driver.status && driver.status !== 'Aktif') error='driver ditemukan, tetapi status Master Driver tidak Aktif'
         else if(!bulan || bulan<1 || bulan>12) error='bulan wajib 1-12'
         else if(!tahun) error='tahun wajib'
-        return { row:idx+2, site_code:siteCode, nrp_driver:nrp, bulan, tahun, status:cleanText(r.status)||'Planned', site_id:site?.id, driver_id:driver?.id, error }
+        return { row:idx+2, site_code:siteCode, nrp_driver:nrp, nama_driver:driver?.nama_driver || '', bulan, tahun, status:cleanText(r.status)||'Planned', site_id:site?.id, driver_id:driver?.id, error }
       })
       setPreview(mapped)
     }catch(e){ setMessage(e.message) }
@@ -1429,9 +1484,9 @@ function PreviewTable({ rows }){
 
 async function parseExcelOrCsv(file){
   const buf = await file.arrayBuffer()
-  const workbook = XLSX.read(buf, { type:'array' })
+  const workbook = XLSX.read(buf, { type:'array', cellDates:true, dateNF:'yyyy-mm-dd' })
   const sheet = workbook.Sheets[workbook.SheetNames[0]]
-  return XLSX.utils.sheet_to_json(sheet, { defval:'' })
+  return XLSX.utils.sheet_to_json(sheet, { defval:'', raw:true })
 }
 
 function PlaceholderApp({ context }) {
