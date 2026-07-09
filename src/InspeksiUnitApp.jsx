@@ -51,6 +51,61 @@ function clean(v){ return String(v ?? '').trim() }
 function normEmail(v){ return clean(v).toLowerCase() }
 function today(){ return new Date().toISOString().slice(0, 10) }
 function nowISO(){ return new Date().toISOString() }
+function pad2(v){ return String(v).padStart(2, '0') }
+function isValidYmd(y, m, d){
+  const dt = new Date(Date.UTC(y, m - 1, d))
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d
+}
+function formatYmd(y, m, d){ return `${y}-${pad2(m)}-${pad2(d)}` }
+function dateToYmd(date){
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return ''
+  return formatYmd(date.getFullYear(), date.getMonth() + 1, date.getDate())
+}
+function normalizeTwoDigitYear(y){ return y < 100 ? (y >= 70 ? 1900 + y : 2000 + y) : y }
+function excelSerialDateToYmd(serial){
+  const n = Number(serial)
+  if (!Number.isFinite(n) || n <= 0) return ''
+  const wholeDays = Math.floor(n)
+  const timeMs = Math.round((n - wholeDays) * 86400000)
+  const dt = new Date(Date.UTC(1899, 11, 30) + wholeDays * 86400000 + timeMs)
+  return formatYmd(dt.getUTCFullYear(), dt.getUTCMonth() + 1, dt.getUTCDate())
+}
+function parseFlexibleDate(value){
+  if (value === null || value === undefined) return ''
+  if (value instanceof Date) return dateToYmd(value)
+  if (typeof value === 'number') return excelSerialDateToYmd(value)
+
+  const raw = clean(value)
+  if (!raw || raw === '-') return ''
+
+  if (/^\d+(\.\d+)?$/.test(raw)) {
+    const n = Number(raw)
+    if (n > 20000 && n < 80000) return excelSerialDateToYmd(n)
+  }
+
+  const iso = raw.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/)
+  if (iso) {
+    const y = Number(iso[1]), m = Number(iso[2]), d = Number(iso[3])
+    return isValidYmd(y, m, d) ? formatYmd(y, m, d) : ''
+  }
+
+  const short = raw.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/)
+  if (short) {
+    const a = Number(short[1]), b = Number(short[2]), y = normalizeTwoDigitYear(Number(short[3]))
+    const tryDmy = isValidYmd(y, b, a) ? formatYmd(y, b, a) : ''
+    const tryMdy = isValidYmd(y, a, b) ? formatYmd(y, a, b) : ''
+    if (a > 12) return tryDmy
+    if (b > 12) return tryMdy
+    return tryDmy || tryMdy
+  }
+
+  const native = new Date(raw)
+  if (!Number.isNaN(native.getTime())) return dateToYmd(native)
+  return ''
+}
+function normalizeHeaderKey(k){
+  return clean(k).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+}
 function canAdmin(role){ return ADMIN_ROLES.includes(role) }
 function canApprove(role){ return APPROVAL_ROLES.includes(role) }
 function isHeadOfficeAdmin(context){ return canAdmin(context?.role) && (!context?.site_id || context?.sites?.site_code === 'JIEP') }
@@ -65,7 +120,12 @@ function monthLabel(v){ return MONTHS.find(m => String(m[0]) === String(v))?.[1]
 function planYear(p){ return p?.created_at ? new Date(p.created_at).getFullYear() : p?.tahun }
 function normalizeRow(row){
   const out = {}
-  Object.keys(row || {}).forEach(k => { out[String(k).trim()] = row[k] })
+  Object.keys(row || {}).forEach(k => {
+    const originalKey = String(k).trim()
+    const normalizedKey = normalizeHeaderKey(originalKey)
+    out[originalKey] = row[k]
+    if (normalizedKey && out[normalizedKey] === undefined) out[normalizedKey] = row[k]
+  })
   return out
 }
 function downloadXlsx(filename, rows, sheetName = 'Data'){
@@ -86,9 +146,9 @@ function downloadTemplate(type){
 }
 async function parseExcel(file){
   const buf = await file.arrayBuffer()
-  const wb = XLSX.read(buf, { type: 'array' })
+  const wb = XLSX.read(buf, { type: 'array', cellDates: true, dateNF: 'yyyy-mm-dd' })
   const ws = wb.Sheets[wb.SheetNames[0]]
-  return XLSX.utils.sheet_to_json(ws, { defval: '' }).map(normalizeRow)
+  return XLSX.utils.sheet_to_json(ws, { defval: '', raw: true }).map(normalizeRow)
 }
 async function uploadCompressedImage(bucket, file, folder = 'uploads'){
   if (!file) return null
@@ -933,6 +993,8 @@ function PlanBulanan({ profile, context }){
       const category = clean(r.category)
       const targetName = clean(r.target_name || r.unit_name || r.parking_name || r.target)
       const targetCode = clean(r.target_code).toUpperCase()
+      const dueRaw = r.due_date ?? r.due ?? r.due_date_pm ?? r.tanggal ?? r.tanggal_planning ?? ''
+      const dueDate = parseFlexibleDate(dueRaw)
       const targetType = targetTypeByCategory(category)
       const target = targetType === 'unit'
         ? (allUnits || []).find(u => u.site_id === site?.id && (clean(u.unit_name).toLowerCase() === targetName.toLowerCase() || (targetCode && u.unit_code === targetCode)))
@@ -942,8 +1004,9 @@ function PlanBulanan({ profile, context }){
       else if (!CATEGORIES.includes(category)) error = 'category tidak valid'
       else if (!target) error = 'target_name tidak ditemukan pada site/category tersebut'
       else if (!r.bulan) error = 'bulan wajib diisi; tahun otomatis berdasarkan created date'
-      else if (category === 'PM Check' && !clean(r.due_date)) error = 'due_date wajib untuk PM Check'
-      return { row:idx+2, site_code:siteCode, site_id:site?.id, category, target_name:targetName || targetLabel({ target_type:targetType, inspection_units:target, inspection_parkings:target }), target_id:target?.id, target_type:targetType, bulan:Number(r.bulan), tahun:new Date().getFullYear(), due_date:clean(r.due_date), error }
+      else if (clean(dueRaw) && !dueDate) error = 'due_date tidak valid. Gunakan format yyyy-mm-dd, dd/mm/yyyy, atau tanggal Excel.'
+      else if (category === 'PM Check' && !dueDate) error = 'due_date wajib untuk PM Check'
+      return { row:idx+2, site_code:siteCode, site_id:site?.id, category, target_name:targetName || targetLabel({ target_type:targetType, inspection_units:target, inspection_parkings:target }), target_id:target?.id, target_type:targetType, bulan:Number(r.bulan), tahun:new Date().getFullYear(), due_date:dueDate, error }
     }))
   }
   async function submitImport(){
