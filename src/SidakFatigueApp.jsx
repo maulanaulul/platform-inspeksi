@@ -495,11 +495,15 @@ function SidakPage({ page, context, profile }) {
 }
 
 
-function DashboardDateFilter({ dateFrom, dateTo, setDateFrom, setDateTo, onClear }) {
-  return <Panel title="Filter Tanggal Dashboard" desc="KPI, achievement, chart, dan row data dashboard mengikuti rentang tanggal ini.">
-    <div className="form-grid">
+function DashboardDateFilter({ dateFrom, dateTo, setDateFrom, setDateTo, onClear, sites = [], siteFilter, setSiteFilter, globalView }) {
+  return <Panel title="Filter Dashboard" desc="Pilih tanggal dan site.">
+    <div className="form-grid sf-filter-grid">
       <label>Dari Tanggal<input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} /></label>
       <label>Sampai Tanggal<input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} /></label>
+      <label>Site<select value={siteFilter} onChange={e=>setSiteFilter(e.target.value)} disabled={!globalView}>
+        {globalView && <option value="ALL">Semua Site</option>}
+        {sites.map(s => <option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}
+      </select></label>
       <button type="button" className="secondary" onClick={onClear}>Reset Filter</button>
     </div>
   </Panel>
@@ -509,50 +513,153 @@ function SidakDashboard({ context }) {
   const [plans, setPlans] = useState([])
   const [inspections, setInspections] = useState([])
   const [outs, setOuts] = useState([])
+  const [sites, setSites] = useState([])
   const [loading, setLoading] = useState(true)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const globalView = isHeadOfficeAdmin(context)
+  const [siteFilter, setSiteFilter] = useState(globalView ? 'ALL' : (context.site_id || 'ALL'))
 
-  useEffect(() => { load() }, [context.id, dateFrom, dateTo])
+  useEffect(() => {
+    setSiteFilter(globalView ? 'ALL' : (context.site_id || 'ALL'))
+  }, [context.id, context.site_id, globalView])
+
+  useEffect(() => { load() }, [context.id, context.site_id, dateFrom, dateTo, siteFilter, globalView])
+
   async function load() {
     setLoading(true)
-    let planQ = supabase.from('fatigue_plans').select('id, bulan, tahun, status, created_at, drivers(nama_driver,nrp_driver), sites(site_name,site_code)').order('created_at', { ascending: false })
-    let inspQ = supabase.from('fatigue_inspections').select('id, tanggal_inspeksi, status, drivers(nama_driver,nrp_driver), sites(site_name,site_code)').order('created_at', { ascending: false })
-    let outQ = supabase.from('fatigue_outstandings').select('id, description, status, created_at, drivers(nama_driver,nrp_driver), sites(site_name,site_code), fatigue_parameters(parameter_name)').order('created_at', { ascending: false })
-    if (!globalView) { planQ = planQ.eq('site_id', context.site_id); inspQ = inspQ.eq('site_id', context.site_id); outQ = outQ.eq('site_id', context.site_id) }
-    if (dateFrom) { planQ = planQ.gte('created_at', dateFrom); inspQ = inspQ.gte('tanggal_inspeksi', dateFrom); outQ = outQ.gte('created_at', dateFrom) }
-    if (dateTo) { const end = dateTo + 'T23:59:59'; planQ = planQ.lte('created_at', end); inspQ = inspQ.lte('tanggal_inspeksi', dateTo); outQ = outQ.lte('created_at', end) }
-    const [{ data: p }, { data: i }, { data: o }] = await Promise.all([planQ, inspQ, outQ])
-    // JIEP adalah Head Office: admin JIEP melihat all site operation.
-    // Data JIEP sendiri tetap tidak masuk KPI/chart operasional.
-    setPlans((p || []).filter(x => x.sites?.site_code !== 'JIEP'))
-    setInspections((i || []).filter(x => x.sites?.site_code !== 'JIEP'))
-    setOuts((o || []).filter(x => x.sites?.site_code !== 'JIEP'))
+    const selectedSiteId = globalView && siteFilter !== 'ALL' ? siteFilter : (!globalView ? context.site_id : null)
+
+    let planQ = supabase
+      .from('fatigue_plans')
+      .select('id, site_id, bulan, tahun, status, created_at, drivers(nama_driver,nrp_driver), sites(site_name,site_code)')
+      .order('created_at', { ascending: false })
+    let inspQ = supabase
+      .from('fatigue_inspections')
+      .select('id, site_id, tanggal_inspeksi, status, drivers(nama_driver,nrp_driver), sites(site_name,site_code)')
+      .order('created_at', { ascending: false })
+    let outQ = supabase
+      .from('fatigue_outstandings')
+      .select('id, site_id, description, status, created_at, drivers(nama_driver,nrp_driver), sites(site_name,site_code), fatigue_parameters(parameter_name)')
+      .order('created_at', { ascending: false })
+
+    if (selectedSiteId) {
+      planQ = planQ.eq('site_id', selectedSiteId)
+      inspQ = inspQ.eq('site_id', selectedSiteId)
+      outQ = outQ.eq('site_id', selectedSiteId)
+    }
+    if (dateFrom) {
+      planQ = planQ.gte('created_at', dateFrom)
+      inspQ = inspQ.gte('tanggal_inspeksi', dateFrom)
+      outQ = outQ.gte('created_at', dateFrom)
+    }
+    if (dateTo) {
+      const end = dateTo + 'T23:59:59'
+      planQ = planQ.lte('created_at', end)
+      inspQ = inspQ.lte('tanggal_inspeksi', dateTo)
+      outQ = outQ.lte('created_at', end)
+    }
+
+    let siteQ = supabase
+      .from('sites')
+      .select('id, site_name, site_code, status')
+      .neq('site_code', 'JIEP')
+      .order('site_code', { ascending: true })
+
+    // Site selector harus benar-benar mengubah isi dashboard.
+    // Kalau user memilih 1 site, daftar Achievement Site hanya menampilkan site itu.
+    // Kalau Semua Site, seluruh site operasional tetap tampil 0% bila belum punya plan.
+    if (selectedSiteId) siteQ = siteQ.eq('id', selectedSiteId)
+
+    const [{ data: p }, { data: i }, { data: o }, { data: s }] = await Promise.all([planQ, inspQ, outQ, siteQ])
+
+    const notJiep = x => (x.sites?.site_code || '').toUpperCase() !== 'JIEP'
+    setPlans((p || []).filter(notJiep))
+    setInspections((i || []).filter(notJiep))
+    setOuts((o || []).filter(notJiep))
+    setSites((s || []).filter(x => (x.site_code || '').toUpperCase() !== 'JIEP').sort((a,b)=>String(a.site_code || '').localeCompare(String(b.site_code || ''))))
     setLoading(false)
   }
 
-  const rows = plans.map(r => ({ id: r.id, bulan: r.bulan, tahun: r.tahun, status: r.status, driver: r.drivers?.nama_driver, nrp: r.drivers?.nrp_driver, site: r.sites?.site_name }))
+  const rows = plans.map(r => ({
+    id: r.id,
+    site: r.sites?.site_code || '-',
+    nama_site: r.sites?.site_name || '-',
+    bulan: r.bulan,
+    tahun: r.tahun,
+    driver: r.drivers?.nama_driver || '-',
+    nrp: r.drivers?.nrp_driver || '-',
+    status: r.status
+  }))
   const actual = inspections.filter(x => x.status === 'Approved').length
+  const submitted = inspections.filter(x => x.status === 'Submitted').length
+  const rejected = inspections.filter(x => x.status === 'Rejected').length
   const open = outs.filter(x => x.status === 'Open').length
+  const closePending = outs.filter(x => x.status === 'Closed').length
   const closed = outs.filter(x => x.status === 'Approved').length
   const achievement = plans.length ? Math.round((actual / plans.length) * 100) : 0
+  const safePercent = v => Math.max(0, Math.min(Number.isFinite(v) ? v : 0, 100))
 
   const siteMap = new Map()
+  const normalizeSiteCode = value => String(value || '').trim().toUpperCase()
+
+  sites
+    .filter(s => normalizeSiteCode(s.site_code) !== 'JIEP')
+    .forEach(s => {
+      const code = s.site_code || '-'
+      if (!siteMap.has(code)) {
+        siteMap.set(code, {
+          site_id: s.id,
+          site_code: code,
+          site: s.site_name || code,
+          plan: 0,
+          actual: 0,
+          submitted: 0,
+          open: 0
+        })
+      }
+    })
+
+  function getSiteBucket(row){
+    const code = row.sites?.site_code || '-'
+    const upperCode = normalizeSiteCode(code)
+    if (!upperCode || upperCode === 'JIEP' || code === '-') return null
+    if (!siteMap.has(code)) {
+      siteMap.set(code, {
+        site_id: row.site_id || '',
+        site_code: code,
+        site: row.sites?.site_name || code,
+        plan: 0,
+        actual: 0,
+        submitted: 0,
+        open: 0
+      })
+    }
+    return siteMap.get(code)
+  }
+
   plans.forEach(p => {
-    const code = p.sites?.site_code || '-'
-    if (!siteMap.has(code)) siteMap.set(code, { site: p.sites?.site_name || code, plan: 0, actual: 0 })
-    siteMap.get(code).plan++
+    const bucket = getSiteBucket(p)
+    if (bucket) bucket.plan++
   })
-  inspections.filter(i => i.status === 'Approved').forEach(i => {
-    const code = i.sites?.site_code || '-'
-    if (!siteMap.has(code)) siteMap.set(code, { site: i.sites?.site_name || code, plan: 0, actual: 0 })
-    siteMap.get(code).actual++
+  inspections.forEach(i => {
+    const bucket = getSiteBucket(i)
+    if (!bucket) return
+    if (i.status === 'Approved') bucket.actual++
+    if (i.status === 'Submitted') bucket.submitted++
   })
-  const siteRows = Array.from(siteMap.values()).map(x => ({ ...x, achievement: x.plan ? Math.round((x.actual/x.plan)*100) : 0 })).sort((a,b)=>a.site.localeCompare(b.site))
+  outs.filter(o => o.status === 'Open').forEach(o => {
+    const bucket = getSiteBucket(o)
+    if (bucket) bucket.open++
+  })
+  const siteRows = Array.from(siteMap.values())
+    .map(x => ({ ...x, achievement: x.plan ? Math.round((x.actual/x.plan)*100) : 0 }))
+    .sort((a,b)=>String(a.site_code || a.site).localeCompare(String(b.site_code || b.site), 'id', { sensitivity:'base' }))
+
   const temuanRows = outs.map(o => ({
     id: o.id,
-    site: o.sites?.site_name || '-',
+    site: o.sites?.site_code || '-',
+    nama_site: o.sites?.site_name || '-',
     driver: o.drivers?.nama_driver || '-',
     nrp: o.drivers?.nrp_driver || '-',
     parameter: o.fatigue_parameters?.parameter_name || 'Temuan',
@@ -562,43 +669,128 @@ function SidakDashboard({ context }) {
   const openRows = temuanRows.filter(r => r.status === 'Open')
   const closePendingRows = temuanRows.filter(r => r.status === 'Closed')
   const closeApprovedRows = temuanRows.filter(r => r.status === 'Approved')
+  const selectedSiteName = siteFilter === 'ALL'
+    ? 'Semua Site'
+    : (sites.find(s => s.id === siteFilter)?.site_code || context.sites?.site_code || 'Site')
 
-  return <div className="stack">
-    <DashboardDateFilter dateFrom={dateFrom} dateTo={dateTo} setDateFrom={setDateFrom} setDateTo={setDateTo} onClear={()=>{setDateFrom('');setDateTo('')}} />
-    <div className="kpi-grid">
-      <Kpi title="Plan Bulanan" value={plans.length} icon={<CalendarCheck/>} />
-      <Kpi title="Aktual Approved" value={actual} icon={<ClipboardCheck/>} />
-      <Kpi title="Achievement" value={`${achievement}%`} icon={<BarChart3/>} />
-      <Kpi title="Outstanding Open" value={open} icon={<AlertTriangle/>} />
+  return <div className="stack sf-dashboard-wrap">
+    <SidakDashboardStyle />
+
+    <div className="sf-hero">
+      <div>
+        <span className="sf-hero-badge">Dashboard Sidak Fatigue</span>
+        <h2>Monitoring Sidak Fatigue</h2>
+        <p>Plan, inspeksi, achievement, dan outstanding.</p>
+      </div>
+      <div className="sf-hero-card">
+        <small>Achievement</small>
+        <strong>{achievement}%</strong>
+        <div className="sf-progress"><span style={{width:`${safePercent(achievement)}%`}} /></div>
+        <p>{actual} approved dari {plans.length} plan</p>
+      </div>
     </div>
+
+    <DashboardDateFilter
+      dateFrom={dateFrom}
+      dateTo={dateTo}
+      setDateFrom={setDateFrom}
+      setDateTo={setDateTo}
+      sites={sites}
+      siteFilter={siteFilter}
+      setSiteFilter={setSiteFilter}
+      globalView={globalView}
+      onClear={()=>{
+        setDateFrom('')
+        setDateTo('')
+        setSiteFilter(globalView ? 'ALL' : (context.site_id || 'ALL'))
+      }}
+    />
+
+    <div className="sf-kpi-grid">
+      <div className="sf-kpi-card"><CalendarCheck size={24}/><span>Plan</span><b>{plans.length}</b></div>
+      <div className="sf-kpi-card"><ClipboardCheck size={24}/><span>Approved</span><b>{actual}</b></div>
+      <div className="sf-kpi-card"><Eye size={24}/><span>Menunggu Approval</span><b>{submitted}</b></div>
+      <div className="sf-kpi-card"><AlertTriangle size={24}/><span>Outstanding Open</span><b>{open}</b></div>
+      <div className="sf-kpi-card"><CheckCircle2 size={24}/><span>Close Approved</span><b>{closed}</b></div>
+      <div className="sf-kpi-card"><XCircle size={24}/><span>Rejected</span><b>{rejected}</b></div>
+    </div>
+
+    <Panel title={`Achievement Site ${selectedSiteName !== 'Semua Site' ? '- ' + selectedSiteName : ''}`} desc="Urutan site berdasarkan abjad." action={<button onClick={()=>downloadXlsx('achievement-site-sidak-fatigue.xlsx', siteRows)}><Download size={16}/> Export Excel</button>}>
+      {loading ? <p>Memuat...</p> : siteRows.length ? <div className="sf-site-grid">
+        {siteRows.map(r => <div className="sf-site-card" key={r.site_code}>
+          <div className="sf-site-head"><b>{r.site_code}</b><span>{r.site}</span></div>
+          <div className="sf-site-score"><strong>{r.achievement}%</strong><span>{r.actual}/{r.plan}</span></div>
+          <div className="sf-progress"><span style={{width:`${safePercent(r.achievement)}%`}} /></div>
+          <div className="sf-mini-row"><span>Submitted</span><b>{r.submitted}</b></div>
+          <div className="sf-mini-row"><span>Open</span><b>{r.open}</b></div>
+        </div>)}
+      </div> : <p className="muted">Belum ada data pada filter ini.</p>}
+    </Panel>
+
     <div className="grid-2">
-      <Panel title="Row Data Plan" desc="Data detail dashboard, siap export CSV/Excel. JIEP tidak masuk hitungan dashboard." action={<button onClick={()=>exportToCsv('sidak-fatigue-plan.csv', rows)}><Download size={16}/> Export CSV</button>}>
-        {loading ? <p>Memuat...</p> : <DataTable rows={rows}/>} 
+      <Panel title="Detail Plan Sidak" desc="Data plan sesuai filter." action={<button onClick={()=>downloadXlsx('detail-plan-sidak-fatigue.xlsx', rows)}><Download size={16}/> Export Excel</button>}>
+        {loading ? <p>Memuat...</p> : <div className="sf-scroll-table"><DataTable rows={rows}/></div>} 
       </Panel>
-      <Panel title="Temuan Terbaru" desc={`${closed} approved close`}>
-        {outs.slice(0,5).map(o => <div className="mini-card" key={o.id}><b>{o.fatigue_parameters?.parameter_name || 'Temuan'}</b><StatusPill value={o.status}/><p>{o.description}</p><small>{o.drivers?.nama_driver}</small></div>)}
+      <Panel title="Temuan Terbaru" desc={`${open} open, ${closePending} close request, ${closed} closed`}>
+        {outs.slice(0,5).map(o => <div className="mini-card" key={o.id}><b>{o.fatigue_parameters?.parameter_name || 'Temuan'}</b><StatusPill value={o.status}/><p>{o.description}</p><small>{o.sites?.site_code} · {o.drivers?.nama_driver}</small></div>)}
         {outs.length === 0 && <p className="muted">Belum ada temuan.</p>}
       </Panel>
     </div>
-    <Panel title="Row Data Temuan Open & Closed" desc="Daftar seluruh temuan open, close pending approval, dan closed approved. Data ini bisa diekspor untuk laporan tindak lanjut." action={<button onClick={()=>downloadXlsx('row-data-temuan-sidak.xlsx', temuanRows)}><Download size={16}/> Export Excel</button>}>
+
+    <Panel title="Row Data Temuan" desc="Temuan open, close request, dan closed approved." action={<button onClick={()=>downloadXlsx('row-data-temuan-sidak.xlsx', temuanRows)}><Download size={16}/> Export Excel</button>}>
       <div className="summary-strip">
         <span><b>{openRows.length}</b> Open</span>
-        <span><b>{closePendingRows.length}</b> Close Pending Approval</span>
-        <span><b>{closeApprovedRows.length}</b> Closed Approved</span>
+        <span><b>{closePendingRows.length}</b> Close Request</span>
+        <span><b>{closeApprovedRows.length}</b> Closed</span>
       </div>
-      {temuanRows.length ? <DataTable rows={temuanRows}/> : <p className="muted">Belum ada row data temuan open/closed.</p>}
-    </Panel>
-    <Panel title="Achievement All Site" desc="Pencapaian inspeksi approved per site. Site JIEP/Head Office dikecualikan dari chart dan hitungan." action={<button onClick={()=>downloadXlsx('achievement-all-site.xlsx', siteRows)}><Download size={16}/> Export Excel</button>}>
-      <div className="site-chart">
-        {siteRows.map(r => <div className="site-bar" key={r.site}>
-          <div className="site-meta"><b>{r.site}</b><span>{r.actual}/{r.plan} · {r.achievement}%</span></div>
-          <div className="bar"><span style={{width:`${Math.min(r.achievement,100)}%`}} /></div>
-        </div>)}
-      </div>
-      <DataTable rows={siteRows}/>
+      {temuanRows.length ? <div className="sf-scroll-table sf-scroll-table-lg"><DataTable rows={temuanRows}/></div> : <p className="muted">Belum ada row data temuan.</p>}
     </Panel>
   </div>
 }
+
+function SidakDashboardStyle(){
+  return <style>{`
+    .sf-dashboard-wrap{gap:20px;}
+    .sf-filter-grid{grid-template-columns:repeat(4,minmax(0,1fr));align-items:end;}
+    .sf-hero{position:relative;overflow:hidden;display:grid;grid-template-columns:1fr 340px;gap:24px;align-items:center;padding:34px;border-radius:28px;background:linear-gradient(135deg,#061944 0%,#123b96 58%,#2d6bff 100%);color:white;box-shadow:0 18px 50px rgba(17,54,128,.22);}
+    .sf-hero:before{content:"";position:absolute;left:-80px;bottom:-140px;width:300px;height:300px;border-radius:50%;background:rgba(255,255,255,.08);}
+    .sf-hero:after{content:"";position:absolute;right:-100px;top:-120px;width:320px;height:320px;border-radius:50%;background:rgba(255,255,255,.11);}
+    .sf-hero>*{position:relative;z-index:1;}
+    .sf-hero-badge{display:inline-flex;align-items:center;padding:8px 16px;border-radius:999px;background:rgba(255,255,255,.13);border:1px solid rgba(255,255,255,.22);font-size:12px;font-weight:900;letter-spacing:.1em;text-transform:uppercase;}
+    .sf-hero h2{margin:18px 0 10px;font-size:42px;line-height:1.05;color:white;}
+    .sf-hero p{margin:0;color:rgba(255,255,255,.86);font-size:17px;}
+    .sf-hero-card{padding:24px;border-radius:24px;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.22);backdrop-filter:blur(12px);}
+    .sf-hero-card small{display:block;color:rgba(255,255,255,.82);font-weight:800;margin-bottom:8px;}
+    .sf-hero-card strong{display:block;font-size:56px;line-height:1;color:white;margin-bottom:16px;}
+    .sf-hero-card p{font-size:14px;margin-top:12px;}
+    .sf-progress{height:12px;background:#e8eef7;border-radius:999px;overflow:hidden;}
+    .sf-progress span{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,#2563eb,#60a5fa);transition:.25s ease;}
+    .sf-hero .sf-progress{background:rgba(255,255,255,.75);}
+    .sf-hero .sf-progress span{background:white;}
+    .sf-kpi-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px;}
+    .sf-kpi-card{display:flex;flex-direction:column;gap:10px;min-height:132px;padding:20px;border:1px solid #e3ebf6;border-radius:24px;background:linear-gradient(180deg,#fff,#f8fbff);box-shadow:0 16px 38px rgba(15,45,90,.08);}
+    .sf-kpi-card svg{padding:10px;width:44px;height:44px;border-radius:16px;background:#eef5ff;color:#2563eb;}
+    .sf-kpi-card span{font-size:13px;color:#65758b;font-weight:800;}
+    .sf-kpi-card b{font-size:34px;line-height:1;color:#061735;}
+    .sf-site-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;}
+    .sf-site-card{padding:18px;border:1px solid #e3ebf6;border-radius:22px;background:#fff;box-shadow:0 14px 30px rgba(15,45,90,.06);}
+    .sf-site-head{display:flex;justify-content:space-between;gap:12px;align-items:start;margin-bottom:14px;}
+    .sf-site-head b{font-size:20px;color:#061735;}
+    .sf-site-head span{font-size:13px;color:#7b8ba0;text-align:right;}
+    .sf-site-score{display:flex;justify-content:space-between;align-items:end;margin-bottom:10px;}
+    .sf-site-score strong{font-size:34px;line-height:1;color:#0f2a5f;}
+    .sf-site-score span{font-weight:900;color:#061735;}
+    .sf-mini-row{display:flex;justify-content:space-between;margin-top:10px;color:#65758b;font-size:13px;}
+    .sf-mini-row b{color:#061735;}
+    .sf-scroll-table{max-height:420px;overflow:auto;border:1px solid #e3ebf6;border-radius:20px;background:#fff;}
+    .sf-scroll-table-lg{max-height:520px;}
+    .sf-scroll-table table{margin:0;}
+    .sf-scroll-table thead th{position:sticky;top:0;z-index:2;background:#f8fbff;box-shadow:0 1px 0 #e3ebf6;}
+    @media(max-width:1200px){.sf-kpi-grid{grid-template-columns:repeat(3,minmax(0,1fr));}.sf-site-grid{grid-template-columns:repeat(2,minmax(0,1fr));}.sf-hero{grid-template-columns:1fr;}.sf-filter-grid{grid-template-columns:repeat(2,minmax(0,1fr));}}
+    @media(max-width:720px){.sf-kpi-grid,.sf-site-grid,.sf-filter-grid{grid-template-columns:1fr;}.sf-hero{padding:24px;}.sf-hero h2{font-size:30px;}.sf-hero-card strong{font-size:42px;}}
+  `}</style>
+}
+
 function DriverMaster({ context }) {
   const [drivers, setDrivers] = useState([])
   const [vendors, setVendors] = useState([])
