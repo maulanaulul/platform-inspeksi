@@ -139,7 +139,7 @@ function downloadTemplate(type){
     unit: [{ site_code:'BAYA', unit_name:'Dump Truck 001', unit_type:'Dump Truck', location:'Pit Area', status:'Aktif' }],
     parking: [{ site_code:'BAYA', parking_name:'Parkiran Barat', location:'Area Barat', capacity:30, status:'Aktif' }],
     parameter: [{ category:'PM Check', parameter_name:'Apakah PM check telah dilakukan pada tanggal xxx (sesuai yang di planning)', description:'Pilih Aman jika PM check sudah dilakukan sesuai tanggal planning. Pilih Tidak Aman jika belum dilakukan / tidak sesuai jadwal.', severity:'High', status:'Aktif' }],
-    plan: [{ site_code:'BAYA', category:'PM Check', target_name:'Dump Truck 001', bulan:5, due_date:'2026-05-31' }],
+    plan: [{ site_code:'BAYA', category:'PM Check', target_name:'Dump Truck 001', target_code:'UNIT-0001', bulan:5, due_date:'2026-05-31' }],
     access: [{ nama:'Nama User', nrp:'NRP-001', email:'user@company.co.id', password:'password123', app_code:'inspeksi_unit', role:'GL', site_code:'BAYA' }]
   }
   downloadXlsx(`template-${type}.xlsx`, samples[type] || [{}], 'Template')
@@ -149,6 +149,48 @@ async function parseExcel(file){
   const wb = XLSX.read(buf, { type: 'array', cellDates: true, dateNF: 'yyyy-mm-dd' })
   const ws = wb.Sheets[wb.SheetNames[0]]
   return XLSX.utils.sheet_to_json(ws, { defval: '', raw: true }).map(normalizeRow)
+}
+
+async function fetchAllRows(table, select = '*', buildQuery = q => q, pageSize = 1000){
+  let page = 0
+  let all = []
+  while (true) {
+    const from = page * pageSize
+    const to = from + pageSize - 1
+    let query = supabase.from(table).select(select).range(from, to)
+    query = buildQuery(query)
+    const { data, error } = await query
+    if (error) throw error
+    const rows = data || []
+    all = all.concat(rows)
+    if (rows.length < pageSize) break
+    page += 1
+  }
+  return all
+}
+function normalizeTargetKey(v){
+  return clean(v)
+    .toUpperCase()
+    .replace(/\s+/g, '')
+    .replace(/[^A-Z0-9]/g, '')
+}
+function isActiveMasterStatus(status){
+  const key = normalizeTargetKey(status)
+  return !key || key === 'AKTIF' || key === 'ACTIVE'
+}
+function sortBySiteAndName(a, b, nameField, codeField){
+  const siteA = a.sites?.site_code || a.site_code || ''
+  const siteB = b.sites?.site_code || b.site_code || ''
+  return siteA.localeCompare(siteB) || clean(a?.[nameField]).localeCompare(clean(b?.[nameField])) || clean(a?.[codeField]).localeCompare(clean(b?.[codeField]))
+}
+function targetMatches(master, searchName, searchCode, codeField, nameField){
+  const keys = [
+    normalizeTargetKey(master?.[codeField]),
+    normalizeTargetKey(master?.[nameField])
+  ].filter(Boolean)
+  const searches = [normalizeTargetKey(searchName), normalizeTargetKey(searchCode)].filter(Boolean)
+  if (!searches.length) return false
+  return searches.some(s => keys.includes(s) || keys.some(k => k && (k.includes(s) || s.includes(k))))
 }
 async function uploadCompressedImage(bucket, file, folder = 'uploads'){
   if (!file) return null
@@ -948,11 +990,19 @@ function MasterUnits({ profile, context }){
   const [form, setForm] = useState({ site_id: context.site_id || '', unit_code:AUTO_CODE_LABEL, unit_name:'', unit_type:'', location:'', status:'Aktif' })
   useEffect(() => { load() }, [context.id])
   async function load(){
-    let q = supabase.from('inspection_units').select('*, sites(site_code,site_name)').order('created_at', { ascending:false })
-    q = scopeQuery(q, context)
-    const [{ data:u }, { data:s }] = await Promise.all([q, supabase.from('sites').select('*').neq('site_code','JIEP').eq('status','Aktif').order('site_code')])
-    setRows(u || []); setSites(adminHO ? (s || []) : (s || []).filter(x => x.id === context.site_id))
-    setForm(f => ({ ...f, site_id: f.site_id || context.site_id || (s || [])[0]?.id || '' }))
+    try {
+      const [allUnits, allSites] = await Promise.all([
+        fetchAllRows('inspection_units', '*, sites(site_code,site_name)', q => q.order('created_at', { ascending:false })),
+        fetchAllRows('sites', '*', q => q.neq('site_code','JIEP').eq('status','Aktif').order('site_code'))
+      ])
+      const scopedUnits = adminHO ? (allUnits || []) : (allUnits || []).filter(x => x.site_id === context.site_id)
+      const visibleSites = adminHO ? (allSites || []) : (allSites || []).filter(x => x.id === context.site_id)
+      setRows(scopedUnits.sort((a,b)=>sortBySiteAndName(a,b,'unit_name','unit_code')))
+      setSites(visibleSites)
+      setForm(f => ({ ...f, site_id: f.site_id || context.site_id || visibleSites[0]?.id || '' }))
+    } catch (err) {
+      setMessage(err.message || 'Gagal memuat master unit.')
+    }
   }
   function reset(){ setEditing(null); setForm({ site_id: context.site_id || '', unit_code:AUTO_CODE_LABEL, unit_name:'', unit_type:'', location:'', status:'Aktif' }) }
   function edit(r){ setEditing(r.id); setForm({ site_id:r.site_id, unit_code:r.unit_code, unit_name:r.unit_name, unit_type:r.unit_type || '', location:r.location || '', status:r.status || 'Aktif' }); window.scrollTo({ top:0, behavior:'smooth' }) }
@@ -1020,7 +1070,7 @@ function MasterUnits({ profile, context }){
       </form>{message && <p className="message">{message}</p>}
     </Panel>
     <Panel title="Import Master Unit Excel" desc="Kode unit dibuat otomatis oleh sistem. User cukup isi site, nama unit, tipe, lokasi, dan status.">
-      <div className="import-actions"><button className="secondary" onClick={()=>downloadTemplate('unit')}><Download size={16}/> Download Template</button><label className="upload-line"><FileSpreadsheet/> Upload Excel<input type="file" accept=".xlsx,.xls" onChange={e=>previewFile(e.target.files?.[0])}/></label>{preview.length>0 && <button disabled={preview.some(r=>r.error)} onClick={submitImport}>Submit Import Valid</button>}</div>
+      <div className="import-actions"><button className="secondary" onClick={()=>downloadTemplate('unit')}><Download size={16}/> Download Template</button><label className="upload-line"><FileSpreadsheet/> Upload Excel<input type="file" accept=".xlsx,.xls" onChange={e=>previewFile(e.target.files?.[0])}/></label>{preview.length>0 && <button disabled={!preview.some(r=>!r.error)} onClick={submitImport}>Submit {preview.filter(r=>!r.error).length} Baris Valid</button>}</div>
       {preview.length>0 && <PreviewTable rows={preview}/>} 
     </Panel>
     <Panel title="Row Data Master Unit" action={<button onClick={()=>downloadXlsx('master-unit.xlsx', table.map(({aksi,...r})=>r))}><Download size={16}/> Export Excel</button>}><DataTable rows={table} customActions={(idx)=>{ const r=rows[idx]; return <div className="row-actions"><button className="secondary small" onClick={()=>edit(r)}>Edit</button><button className="danger small" onClick={()=>remove(r)}>Delete</button></div> }} /></Panel>
@@ -1037,11 +1087,19 @@ function MasterParkings({ profile, context }){
   const [form, setForm] = useState({ site_id: context.site_id || '', parking_code:AUTO_CODE_LABEL, parking_name:'', location:'', capacity:'', status:'Aktif' })
   useEffect(() => { load() }, [context.id])
   async function load(){
-    let q = supabase.from('inspection_parkings').select('*, sites(site_code,site_name)').order('created_at', { ascending:false })
-    q = scopeQuery(q, context)
-    const [{ data:p }, { data:s }] = await Promise.all([q, supabase.from('sites').select('*').neq('site_code','JIEP').eq('status','Aktif').order('site_code')])
-    setRows(p || []); setSites(adminHO ? (s || []) : (s || []).filter(x => x.id === context.site_id))
-    setForm(f => ({ ...f, site_id: f.site_id || context.site_id || (s || [])[0]?.id || '' }))
+    try {
+      const [allParkings, allSites] = await Promise.all([
+        fetchAllRows('inspection_parkings', '*, sites(site_code,site_name)', q => q.order('created_at', { ascending:false })),
+        fetchAllRows('sites', '*', q => q.neq('site_code','JIEP').eq('status','Aktif').order('site_code'))
+      ])
+      const scopedParkings = adminHO ? (allParkings || []) : (allParkings || []).filter(x => x.site_id === context.site_id)
+      const visibleSites = adminHO ? (allSites || []) : (allSites || []).filter(x => x.id === context.site_id)
+      setRows(scopedParkings.sort((a,b)=>sortBySiteAndName(a,b,'parking_name','parking_code')))
+      setSites(visibleSites)
+      setForm(f => ({ ...f, site_id: f.site_id || context.site_id || visibleSites[0]?.id || '' }))
+    } catch (err) {
+      setMessage(err.message || 'Gagal memuat master parkiran.')
+    }
   }
   function reset(){ setEditing(null); setForm({ site_id: context.site_id || '', parking_code:AUTO_CODE_LABEL, parking_name:'', location:'', capacity:'', status:'Aktif' }) }
   function edit(r){ setEditing(r.id); setForm({ site_id:r.site_id, parking_code:r.parking_code, parking_name:r.parking_name, location:r.location || '', capacity:r.capacity || '', status:r.status || 'Aktif' }); window.scrollTo({ top:0, behavior:'smooth' }) }
@@ -1105,7 +1163,7 @@ function MasterParkings({ profile, context }){
       </form>{message && <p className="message">{message}</p>}
     </Panel>
     <Panel title="Import Master Parkiran Excel" desc="Kode parkiran dibuat otomatis oleh sistem. User cukup isi site, nama parkiran, lokasi, kapasitas, dan status.">
-      <div className="import-actions"><button className="secondary" onClick={()=>downloadTemplate('parking')}><Download size={16}/> Download Template</button><label className="upload-line"><FileSpreadsheet/> Upload Excel<input type="file" accept=".xlsx,.xls" onChange={e=>previewFile(e.target.files?.[0])}/></label>{preview.length>0 && <button disabled={preview.some(r=>r.error)} onClick={submitImport}>Submit Import Valid</button>}</div>
+      <div className="import-actions"><button className="secondary" onClick={()=>downloadTemplate('parking')}><Download size={16}/> Download Template</button><label className="upload-line"><FileSpreadsheet/> Upload Excel<input type="file" accept=".xlsx,.xls" onChange={e=>previewFile(e.target.files?.[0])}/></label>{preview.length>0 && <button disabled={!preview.some(r=>!r.error)} onClick={submitImport}>Submit {preview.filter(r=>!r.error).length} Baris Valid</button>}</div>
       {preview.length>0 && <PreviewTable rows={preview}/>} 
     </Panel>
     <Panel title="Row Data Master Parkiran" action={<button onClick={()=>downloadXlsx('master-parkiran.xlsx', table.map(({aksi,...r})=>r))}><Download size={16}/> Export Excel</button>}><DataTable rows={table} customActions={(idx)=>{ const r=rows[idx]; return <div className="row-actions"><button className="secondary small" onClick={()=>edit(r)}>Edit</button><button className="danger small" onClick={()=>remove(r)}>Delete</button></div> }} /></Panel>
@@ -1171,7 +1229,7 @@ function ParameterChecklist(){
         <button>{editing ? 'Update Parameter' : 'Simpan Parameter'}</button>{editing && <button type="button" className="secondary" onClick={reset}>Batal</button>}
       </form>{message && <p className="message">{message}</p>}
     </Panel>
-    <Panel title="Import Parameter Excel" desc="parameter_code dibuat otomatis oleh sistem. User cukup isi kategori, nama parameter, deskripsi, severity, dan status."><div className="import-actions"><button className="secondary" onClick={()=>downloadTemplate('parameter')}><Download size={16}/> Download Template</button><label className="upload-line"><FileSpreadsheet/> Upload Excel<input type="file" accept=".xlsx,.xls" onChange={e=>previewFile(e.target.files?.[0])}/></label>{preview.length>0 && <button disabled={preview.some(r=>r.error)} onClick={submitImport}>Submit Import Valid</button>}</div>{preview.length>0 && <PreviewTable rows={preview}/>}</Panel>
+    <Panel title="Import Parameter Excel" desc="parameter_code dibuat otomatis oleh sistem. User cukup isi kategori, nama parameter, deskripsi, severity, dan status."><div className="import-actions"><button className="secondary" onClick={()=>downloadTemplate('parameter')}><Download size={16}/> Download Template</button><label className="upload-line"><FileSpreadsheet/> Upload Excel<input type="file" accept=".xlsx,.xls" onChange={e=>previewFile(e.target.files?.[0])}/></label>{preview.length>0 && <button disabled={!preview.some(r=>!r.error)} onClick={submitImport}>Submit {preview.filter(r=>!r.error).length} Baris Valid</button>}</div>{preview.length>0 && <PreviewTable rows={preview}/>}</Panel>
     <Panel title="Row Data Parameter Checklist" action={<button onClick={()=>downloadXlsx('parameter-checklist.xlsx', table.map(({aksi,...r})=>r))}><Download size={16}/> Export Excel</button>}><DataTable rows={table} customActions={(idx)=>{ const r=rows[idx]; return <div className="row-actions"><button className="secondary small" onClick={()=>edit(r)}>Edit</button><button className="danger small" onClick={()=>remove(r)}>Delete</button></div> }} /></Panel>
   </div>
 }
@@ -1187,14 +1245,26 @@ function PlanBulanan({ profile, context }){
   const [form, setForm] = useState({ site_id: context.site_id || '', category:CATEGORIES[0], target_id:'', bulan:String(new Date().getMonth()+1), tahun:String(new Date().getFullYear()), due_date:'' })
   useEffect(() => { load() }, [context.id])
   async function load(){
-    let unitQ = supabase.from('inspection_units').select('*, sites(site_code,site_name)').eq('status','Aktif').order('unit_code')
-    let parkQ = supabase.from('inspection_parkings').select('*, sites(site_code,site_name)').eq('status','Aktif').order('parking_code')
-    let planQ = supabase.from('inspection_plans').select('*, sites(site_code,site_name), inspection_units(unit_code,unit_name), inspection_parkings(parking_code,parking_name)').order('created_at', { ascending:false })
-    unitQ = scopeQuery(unitQ, context); parkQ = scopeQuery(parkQ, context); planQ = scopeQuery(planQ, context)
-    const [{ data:u }, { data:p }, { data:pl }, { data:s }] = await Promise.all([unitQ, parkQ, planQ, supabase.from('sites').select('*').neq('site_code','JIEP').eq('status','Aktif').order('site_code')])
-    setUnits(u || []); setParkings(p || []); setPlans(pl || []); setSites(adminHO ? (s || []) : (s || []).filter(x => x.id === context.site_id))
-    const firstTarget = (isUnitBasedCategory(form.category) ? (u || [])[0]?.id : (p || [])[0]?.id) || ''
-    setForm(f => ({ ...f, site_id:f.site_id || context.site_id || (s || [])[0]?.id || '', target_id:f.target_id || firstTarget }))
+    try {
+      const [allUnits, allParkings, allPlans, allSites] = await Promise.all([
+        fetchAllRows('inspection_units', '*, sites(site_code,site_name)', q => q.order('unit_name')),
+        fetchAllRows('inspection_parkings', '*, sites(site_code,site_name)', q => q.order('parking_name')),
+        fetchAllRows('inspection_plans', '*, sites(site_code,site_name), inspection_units(unit_code,unit_name), inspection_parkings(parking_code,parking_name)', q => q.order('created_at', { ascending:false })),
+        fetchAllRows('sites', '*', q => q.neq('site_code','JIEP').eq('status','Aktif').order('site_code'))
+      ])
+      const scopedUnits = (adminHO ? allUnits : allUnits.filter(x => x.site_id === context.site_id)).filter(x => isActiveMasterStatus(x.status)).sort((a,b)=>sortBySiteAndName(a,b,'unit_name','unit_code'))
+      const scopedParkings = (adminHO ? allParkings : allParkings.filter(x => x.site_id === context.site_id)).filter(x => isActiveMasterStatus(x.status)).sort((a,b)=>sortBySiteAndName(a,b,'parking_name','parking_code'))
+      const scopedPlans = adminHO ? allPlans : allPlans.filter(x => x.site_id === context.site_id)
+      const visibleSites = adminHO ? (allSites || []) : (allSites || []).filter(x => x.id === context.site_id)
+      setUnits(scopedUnits || [])
+      setParkings(scopedParkings || [])
+      setPlans(scopedPlans || [])
+      setSites(visibleSites)
+      const firstTarget = (isUnitBasedCategory(form.category) ? scopedUnits[0]?.id : scopedParkings[0]?.id) || ''
+      setForm(f => ({ ...f, site_id:f.site_id || context.site_id || visibleSites[0]?.id || '', target_id:f.target_id || firstTarget }))
+    } catch (err) {
+      setMessage(err.message || 'Gagal memuat data plan inspeksi.')
+    }
   }
   const filteredTargets = (isUnitBasedCategory(form.category) ? units : parkings).filter(t => adminHO ? (!form.site_id || t.site_id === form.site_id) : t.site_id === context.site_id)
   useEffect(() => { setForm(f => ({ ...f, target_id: filteredTargets[0]?.id || '' })) }, [form.category, form.site_id, units.length, parkings.length])
@@ -1213,30 +1283,50 @@ function PlanBulanan({ profile, context }){
   async function previewFile(file){
     if (!file) return
     const raw = await parseExcel(file)
-    const [{ data:allSites }, { data:allUnits }, { data:allParkings }] = await Promise.all([
-      supabase.from('sites').select('id,site_code'), supabase.from('inspection_units').select('id,site_id,unit_code,unit_name'), supabase.from('inspection_parkings').select('id,site_id,parking_code,parking_name')
-    ])
-    setPreview(raw.map((r, idx) => {
-      const siteCode = adminHO ? clean(r.site_code).toUpperCase() : context.sites?.site_code
-      const site = (allSites || []).find(s => s.site_code === siteCode)
-      const category = clean(r.category)
-      const targetName = clean(r.target_name || r.unit_name || r.parking_name || r.target)
-      const targetCode = clean(r.target_code).toUpperCase()
-      const dueRaw = r.due_date ?? r.due ?? r.due_date_pm ?? r.tanggal ?? r.tanggal_planning ?? ''
-      const dueDate = parseFlexibleDate(dueRaw)
-      const targetType = targetTypeByCategory(category)
-      const target = targetType === 'unit'
-        ? (allUnits || []).find(u => u.site_id === site?.id && (clean(u.unit_name).toLowerCase() === targetName.toLowerCase() || (targetCode && u.unit_code === targetCode)))
-        : (allParkings || []).find(p => p.site_id === site?.id && (clean(p.parking_name).toLowerCase() === targetName.toLowerCase() || (targetCode && p.parking_code === targetCode)))
-      let error = ''
-      if (!site) error = 'site_code tidak ditemukan'
-      else if (!CATEGORIES.includes(category)) error = 'category tidak valid'
-      else if (!target) error = 'target_name tidak ditemukan pada site/category tersebut'
-      else if (!r.bulan) error = 'bulan wajib diisi; tahun otomatis berdasarkan created date'
-      else if (clean(dueRaw) && !dueDate) error = 'due_date tidak valid. Gunakan format yyyy-mm-dd, dd/mm/yyyy, atau tanggal Excel.'
-      else if (category === 'PM Check' && !dueDate) error = 'due_date wajib untuk PM Check'
-      return { row:idx+2, site_code:siteCode, site_id:site?.id, category, target_name:targetName || targetLabel({ target_type:targetType, inspection_units:target, inspection_parkings:target }), target_id:target?.id, target_type:targetType, bulan:Number(r.bulan), tahun:new Date().getFullYear(), due_date:dueDate, error }
-    }))
+    try {
+      const [allSites, allUnits, allParkings] = await Promise.all([
+        fetchAllRows('sites', 'id,site_code,site_name,status', q => q.order('site_code')),
+        fetchAllRows('inspection_units', 'id,site_id,unit_code,unit_name,status', q => q.order('unit_code')),
+        fetchAllRows('inspection_parkings', 'id,site_id,parking_code,parking_name,status', q => q.order('parking_code'))
+      ])
+      const siteMap = new Map((allSites || []).map(s => [normalizeTargetKey(s.site_code), s]))
+      const activeUnits = (allUnits || []).filter(u => isActiveMasterStatus(u.status))
+      const activeParkings = (allParkings || []).filter(p => isActiveMasterStatus(p.status))
+      setPreview(raw.map((r, idx) => {
+        const siteCode = adminHO ? clean(r.site_code || r.site).toUpperCase() : context.sites?.site_code
+        const site = siteMap.get(normalizeTargetKey(siteCode))
+        const rawCategory = clean(r.category || r.kategori)
+        const category = CATEGORIES.find(c => normalizeTargetKey(c) === normalizeTargetKey(rawCategory)) || rawCategory
+        const targetName = clean(r.target_name || r.unit_name || r.parking_name || r.target || r.nama_unit || r.nama_parkiran || r.kode_unit || r.kode_parkiran)
+        const targetCode = clean(r.target_code || r.unit_code || r.parking_code || r.kode_target || r.kode_unit || r.kode_parkiran)
+        const dueRaw = r.due_date ?? r.due ?? r.due_date_pm ?? r.tanggal ?? r.tanggal_planning ?? ''
+        const dueDate = parseFlexibleDate(dueRaw)
+        const targetType = targetTypeByCategory(category)
+        const source = targetType === 'unit' ? activeUnits : activeParkings
+        const target = source.find(t => {
+          if (t.site_id !== site?.id) return false
+          return targetType === 'unit'
+            ? targetMatches(t, targetName, targetCode, 'unit_code', 'unit_name')
+            : targetMatches(t, targetName, targetCode, 'parking_code', 'parking_name')
+        })
+        const sameTargetOtherSite = !target ? source.find(t => targetType === 'unit'
+          ? targetMatches(t, targetName, targetCode, 'unit_code', 'unit_name')
+          : targetMatches(t, targetName, targetCode, 'parking_code', 'parking_name')) : null
+        const otherSite = sameTargetOtherSite ? (allSites || []).find(s => s.id === sameTargetOtherSite.site_id) : null
+        let error = ''
+        if (!site) error = 'site_code tidak ditemukan'
+        else if (!CATEGORIES.includes(category)) error = 'category tidak valid'
+        else if (!targetName && !targetCode) error = 'target_name atau target_code wajib diisi'
+        else if (!target && otherSite) error = `target ditemukan di site ${otherSite.site_code}, bukan ${siteCode}`
+        else if (!target) error = 'target tidak ditemukan pada Master Unit/Parkiran aktif. Cek site, status aktif, dan pastikan data sudah termuat semua.'
+        else if (!r.bulan) error = 'bulan wajib diisi; tahun otomatis berdasarkan created date'
+        else if (clean(dueRaw) && !dueDate) error = 'due_date tidak valid. Gunakan format yyyy-mm-dd, dd/mm/yyyy, atau tanggal Excel.'
+        else if (category === 'PM Check' && !dueDate) error = 'due_date wajib untuk PM Check'
+        return { row:idx+2, site_code:siteCode, site_id:site?.id, category, target_name:targetName || targetLabel({ target_type:targetType, inspection_units:target, inspection_parkings:target }), target_code:targetCode || (targetType === 'unit' ? target?.unit_code : target?.parking_code), target_id:target?.id, target_type:targetType, bulan:Number(r.bulan), tahun:new Date().getFullYear(), due_date:dueDate, error }
+      }))
+    } catch (err) {
+      setMessage(err.message || 'Gagal membaca master unit/parkiran.')
+    }
   }
   async function submitImport(){
     const valid = preview.filter(r => !r.error)
@@ -1260,8 +1350,8 @@ function PlanBulanan({ profile, context }){
         <button>Simpan Plan</button>
       </form>{message && <p className="message">{message}</p>}
     </Panel>
-    <Panel title="Import Plan Inspeksi Excel" desc="Template memakai target_name. Pilih nama unit/parkiran dari master data; kode target dibuat otomatis oleh sistem dan tidak perlu diisi user.">
-      <div className="import-actions"><button className="secondary" onClick={()=>downloadTemplate('plan')}><Download size={16}/> Download Template</button><label className="upload-line"><FileSpreadsheet/> Upload Excel<input type="file" accept=".xlsx,.xls" onChange={e=>previewFile(e.target.files?.[0])}/></label>{preview.length>0 && <button disabled={preview.some(r=>r.error)} onClick={submitImport}>Submit Import Valid</button>}</div>
+    <Panel title="Import Plan Inspeksi Excel" desc="Template bisa memakai target_name atau target_code. Isi kode/nama unit atau parkiran sesuai master data aktif.">
+      <div className="import-actions"><button className="secondary" onClick={()=>downloadTemplate('plan')}><Download size={16}/> Download Template</button><label className="upload-line"><FileSpreadsheet/> Upload Excel<input type="file" accept=".xlsx,.xls" onChange={e=>previewFile(e.target.files?.[0])}/></label>{preview.length>0 && <button disabled={!preview.some(r=>!r.error)} onClick={submitImport}>Submit {preview.filter(r=>!r.error).length} Baris Valid</button>}</div>
       {preview.length>0 && <PreviewTable rows={preview}/>} 
     </Panel>
     <Panel title="Plan Aktif untuk Inspeksi" desc="Hanya status Planned dan Rejected yang muncul di sini."><DataTable rows={activePlans.map(p => ({ site:p.sites?.site_code, kategori:p.category, target:targetLabel(p), bulan:monthLabel(p.bulan), tahun:planYear(p), due:p.due_date || '-', status:p.status }))}/></Panel>
