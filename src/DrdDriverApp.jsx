@@ -84,6 +84,31 @@ function normEmail(v){ return clean(v).toLowerCase() }
 function isValidEmail(v){ const e = normEmail(v); return !e || /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/.test(e) }
 function today(){ return new Date().toISOString().slice(0,10) }
 function months(n){ const d = new Date(); d.setMonth(d.getMonth()+n); return d.toISOString().slice(0,10) }
+
+function addDaysIso(baseDate, days){
+  const iso = excelDateToIso(baseDate) || today()
+  const [y,m,d] = iso.split('-').map(Number)
+  const dt = new Date(Date.UTC(y, m - 1, d))
+  dt.setUTCDate(dt.getUTCDate() + Number(days || 0))
+  return dt.toISOString().slice(0,10)
+}
+function normKey(v){ return clean(v).toLowerCase().replace(/[^a-z0-9]/g,'') }
+function excelCell(row, aliases=[]){
+  const keyMap = new Map(Object.keys(row || {}).map(k => [normKey(k), k]))
+  for(const a of aliases){
+    const hit = keyMap.get(normKey(a))
+    if(hit !== undefined) return row[hit]
+  }
+  return ''
+}
+function normNrp(v){ return clean(v).toUpperCase().replace(/\s+/g,'') }
+function optionText(v){ return v ? `Opsi ${v}` : 'Belum dijawab' }
+function selectedSiteLabel(siteIds=[], sites=[]){
+  const ids = Array.isArray(siteIds) ? siteIds : (siteIds ? [siteIds] : [])
+  if(!ids.length) return 'semua-site'
+  if(ids.length === 1) return sites.find(s => String(s.id) === String(ids[0]))?.site_code || 'site-terpilih'
+  return `${ids.length}-site`
+}
 function isAdmin(w){ return ROLE_ADMIN.includes(w?.role) }
 function isGL(w){ return w?.role === 'GL' }
 function isDriver(w){ return w?.role === 'Driver' }
@@ -256,19 +281,20 @@ function ScrollTable({rows, actions, height=420}){
 }
 
 
-function DashboardDateFilter({ dateFrom, dateTo, setDateFrom, setDateTo, onClear, sites=[], siteFilter='', setSiteFilter, showSiteFilter=false }) {
+function DashboardDateFilter({ dateFrom, dateTo, setDateFrom, setDateTo, onClear, sites=[], siteFilter=[], setSiteFilter, showSiteFilter=false }) {
+  const selectedIds = Array.isArray(siteFilter) ? siteFilter : (siteFilter ? [siteFilter] : [])
   return <Panel title="Filter Dashboard" desc="KPI, achievement, chart, dan row data dashboard mengikuti filter tanggal dan site ini.">
     <div className="form-grid">
       <label>Dari Tanggal<input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} /></label>
       <label>Sampai Tanggal<input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} /></label>
-      {showSiteFilter&&<label>Site<select value={siteFilter} onChange={e=>setSiteFilter(e.target.value)}><option value="">Semua Site</option>{sites.map(s=><option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}</select></label>}
+      {showSiteFilter&&<label>Site <span className="muted">(bisa pilih banyak)</span><select multiple size={Math.min(Math.max(sites.length, 3), 8)} value={selectedIds} onChange={e=>setSiteFilter(Array.from(e.target.selectedOptions).map(o=>o.value))}>{sites.map(s=><option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}</select><small className="muted">Kosongkan pilihan untuk menampilkan semua site.</small></label>}
       <button type="button" className="secondary" onClick={onClear}>Reset Filter</button>
     </div>
   </Panel>
 }
 
 
-const HIDDEN_DASHBOARD_SITE_CODES = new Set(['JIEP'])
+const HIDDEN_DASHBOARD_SITE_CODES = new Set(['JIEP','BAYA','KPCB'])
 function isHiddenDashboardSiteCode(code){ return HIDDEN_DASHBOARD_SITE_CODES.has(String(code || '').trim().toUpperCase()) }
 function isVisibleDashboardSite(site){ return !isHiddenDashboardSiteCode(site?.site_code) }
 function isVisibleDashboardDriver(driver){ return !isHiddenDashboardSiteCode(driver?.sites?.site_code) }
@@ -277,11 +303,14 @@ function isVisibleDashboardPeriod(row){ return !isHiddenDashboardSiteCode(row?.d
 
 function Dashboard({work}){
   const [drivers,setDrivers]=useState([]), [attempts,setAttempts]=useState([]), [periods,setPeriods]=useState([]), [sites,setSites]=useState([])
-  const [dateFrom,setDateFrom]=useState(''), [dateTo,setDateTo]=useState(''), [siteFilter,setSiteFilter]=useState('')
-  useEffect(()=>{load()},[work.id,dateFrom,dateTo,siteFilter])
+  const [dateFrom,setDateFrom]=useState(''), [dateTo,setDateTo]=useState(''), [siteFilter,setSiteFilter]=useState([])
+  const siteFilterKey = Array.isArray(siteFilter) ? siteFilter.join('|') : String(siteFilter || '')
+  useEffect(()=>{load()},[work.id,dateFrom,dateTo,siteFilterKey])
   async function load(){
     const admin=isAdmin(work)
-    const buildDrivers=()=>{ let q=supabase.from('drivers').select('*,sites(site_code,site_name),vendors(vendor_name)').eq('status','Aktif').order('created_at',{ascending:false}); if(admin&&siteFilter) q=q.eq('site_id',siteFilter); if(!admin) q=q.eq('site_id',work.site_id); return q }
+    const selectedSiteIds = Array.isArray(siteFilter) ? siteFilter.filter(Boolean) : (siteFilter ? [siteFilter] : [])
+    const matchSelectedSite = siteId => !selectedSiteIds.length || selectedSiteIds.some(id => String(id) === String(siteId))
+    const buildDrivers=()=>{ let q=supabase.from('drivers').select('*,sites(site_code,site_name),vendors(vendor_name)').eq('status','Aktif').order('created_at',{ascending:false}); if(admin&&selectedSiteIds.length) q=q.in('site_id',selectedSiteIds); if(!admin) q=q.eq('site_id',work.site_id); return q }
     const buildAttempts=()=>{ let q=supabase.from('drd_attempts').select('*,drivers(site_id,nama_driver,nrp_driver,email,sites(site_code,site_name))').order('created_at',{ascending:false}); if(dateFrom) q=q.gte('created_at',dateFrom); if(dateTo) q=q.lte('created_at',dateTo+'T23:59:59'); return q }
     const buildPeriods=()=>{ let q=supabase.from('drd_induction_periods').select('*,drivers(nama_driver,nrp_driver,site_id,sites(site_code,site_name))').order('created_at',{ascending:false}); if(dateFrom) q=q.gte('created_at',dateFrom); if(dateTo) q=q.lte('created_at',dateTo+'T23:59:59'); return q }
     const [d,a,p,s]=await Promise.all([
@@ -292,19 +321,24 @@ function Dashboard({work}){
     ])
     const visibleDrivers=(d||[]).filter(isVisibleDashboardDriver)
     const scopedAttempts=(a||[])
-      .filter(r=>admin ? (!siteFilter || r.drivers?.site_id===siteFilter) : r.drivers?.site_id===work.site_id)
+      .filter(r=>admin ? matchSelectedSite(r.drivers?.site_id) : r.drivers?.site_id===work.site_id)
       .filter(isVisibleDashboardAttempt)
     const scopedPeriods=(p||[])
-      .filter(r=>admin ? (!siteFilter || r.drivers?.site_id===siteFilter) : r.drivers?.site_id===work.site_id)
+      .filter(r=>admin ? matchSelectedSite(r.drivers?.site_id) : r.drivers?.site_id===work.site_id)
       .filter(isVisibleDashboardPeriod)
     setDrivers(visibleDrivers); setAttempts(scopedAttempts); setPeriods(scopedPeriods); if(admin) setSites((s||[]).filter(isVisibleDashboardSite))
   }
   const latestDrd=new Map()
   attempts.filter(a=>(a.test_type||'DRD')==='DRD').forEach(a=>{ if(!latestDrd.has(a.driver_id)) latestDrd.set(a.driver_id,a) })
   function currentInductionPeriod(d){
-    return periods.find(p=>String(p.driver_id)===String(d.id) && String(p.masa_dinas_end_date||'')===String(d.end_masa_dinas||''))
+    const current = periods.find(p=>String(p.driver_id)===String(d.id) && String(p.masa_dinas_end_date||'')===String(d.end_masa_dinas||''))
       || periods.find(p=>String(p.driver_id)===String(d.id) && !p.masa_dinas_end_date)
-      || null
+    if(current) return current
+    // Setelah induksi closed, end_masa_dinas driver diperpanjang 70 hari.
+    // Pada kondisi itu periode closed lama tetap ditampilkan sebagai histori aktif dashboard,
+    // tetapi tidak dipakai lagi ketika masa dinas baru sudah habis dan butuh periode baru.
+    if(!isExpired(d.end_masa_dinas)) return periods.find(p=>String(p.driver_id)===String(d.id)) || null
+    return null
   }
   const drdOk=drivers.filter(d=>{ const a=latestDrd.get(d.id); return a?.status==='Lulus' && (!a.valid_until || a.valid_until>=today()) }).length
   const total=drivers.length, drdBelum=total-drdOk, drdAch=total?Math.round(drdOk/total*100):0
@@ -359,7 +393,7 @@ function Dashboard({work}){
     const p=currentInductionPeriod(d)
     const expired=isExpired(d.end_masa_dinas)
     const due=p ? isOnsiteDue(p) : false
-    const status=!expired ? 'Belum Wajib' : !p ? 'Butuh Input Periode' : p.status==='Closed' ? 'Closed' : due ? 'Open - Wajib Induksi' : 'Menunggu Onsite'
+    const status=p?.status==='Closed' ? 'Closed' : !expired ? 'Belum Wajib' : !p ? 'Butuh Input Periode' : due ? 'Open - Wajib Induksi' : 'Menunggu Onsite'
     return {
       site:d.sites?.site_code||'-',
       nama_driver:d.nama_driver,
@@ -373,10 +407,10 @@ function Dashboard({work}){
     }
   }).sort((a,b)=>String(a.site).localeCompare(String(b.site))||String(a.status_induksi).localeCompare(String(b.status_induksi))||String(a.nama_driver).localeCompare(String(b.nama_driver)))
   const detailDriverRows=[...driverDrdRows].sort((a,b)=>String(a.site).localeCompare(String(b.site))||String(a.nama_driver).localeCompare(String(b.nama_driver)))
-  const detailDriverFileName=`detail-driver-dashboard-drd-${siteFilter ? (sites.find(s=>String(s.id)===String(siteFilter))?.site_code || 'site-terpilih') : 'semua-site'}.xlsx`
-  const inductionDetailFileName=`detail-induksi-driver-${siteFilter ? (sites.find(s=>String(s.id)===String(siteFilter))?.site_code || 'site-terpilih') : 'semua-site'}.xlsx`
+  const detailDriverFileName=`detail-driver-dashboard-drd-${selectedSiteLabel(siteFilter, sites)}.xlsx`
+  const inductionDetailFileName=`detail-induksi-driver-${selectedSiteLabel(siteFilter, sites)}.xlsx`
   return <div className="stack">
-    <DashboardDateFilter dateFrom={dateFrom} dateTo={dateTo} setDateFrom={setDateFrom} setDateTo={setDateTo} sites={sites} siteFilter={siteFilter} setSiteFilter={setSiteFilter} showSiteFilter={isAdmin(work)} onClear={()=>{setDateFrom('');setDateTo('');setSiteFilter('')}}/>
+    <DashboardDateFilter dateFrom={dateFrom} dateTo={dateTo} setDateFrom={setDateFrom} setDateTo={setDateTo} sites={sites} siteFilter={siteFilter} setSiteFilter={setSiteFilter} showSiteFilter={isAdmin(work)} onClear={()=>{setDateFrom('');setDateTo('');setSiteFilter([])}}/>
     <div className="kpi-grid"><Kpi title="Total Driver" value={total} icon={<Truck/>}/><Kpi title="Sudah DRD" value={drdOk} icon={<CheckCircle2/>}/><Kpi title="Belum DRD" value={drdBelum} icon={<AlertTriangle/>}/><Kpi title="Achievement DRD" value={`${drdAch}%`} icon={<BarChart3/>}/><Kpi title="Open Induksi" value={openInduksi} icon={<Video/>}/><Kpi title="Induksi Closed" value={closedInduksi} icon={<ShieldCheck/>}/><Kpi title="Achievement Induksi" value={`${inductionAch}%`} icon={<Award/>}/><Kpi title="Masa Dinas Habis" value={expiredDrivers.length} icon={<CalendarCheck/>}/></div>
     <Panel title="Dashboard DRD per Site" desc="Pencapaian DRD dihitung dari driver aktif yang sudah lulus dan belum expired." action={<div className="row-actions"><button onClick={()=>exportXlsx('achievement-drd-site.xlsx',siteRows)}><Download size={16}/> Export Summary</button><button className="secondary" onClick={()=>exportXlsx(detailDriverFileName,detailDriverRows)}><Download size={16}/> Export Detail Driver</button></div>}>
       <div className="site-chart">{siteRows.map(r=><div className="site-bar" key={r.site}><div className="site-meta"><b>{r.site}</b><span>{r.drd_ok}/{r.total} · {r.achievement}%</span></div><div className="bar"><span style={{width:`${Math.min(r.achievement,100)}%`}}/></div></div>)}</div><ScrollTable rows={siteRows} height={320}/>
@@ -742,10 +776,10 @@ function MasterDriver({profile,work}){
   </div>
 }
 function CutiPeriods({profile,work}){
-  const [drivers,setDrivers]=useState([]), [periods,setPeriods]=useState([]), [form,setForm]=useState({driver_id:'',cuti_start_date:'',onsite_date:''}), [msg,setMsg]=useState(''), [modalOpen,setModalOpen]=useState(false)
+  const [drivers,setDrivers]=useState([]), [periods,setPeriods]=useState([]), [form,setForm]=useState({driver_id:'',cuti_start_date:'',onsite_date:''}), [msg,setMsg]=useState(''), [modalOpen,setModalOpen]=useState(false), [periodPreview,setPeriodPreview]=useState([]), [importingPeriod,setImportingPeriod]=useState(false)
   useEffect(()=>{load()},[work.id])
   async function load(){
-    let dq=supabase.from('drivers').select('*,sites(site_code,site_name)').eq('status','Aktif')
+    let dq=supabase.from('drivers').select('*,sites(site_code,site_name)').eq('status','Aktif').order('nama_driver')
     if(!isAdmin(work))dq=dq.eq('site_id',work.site_id)
     const [{data:d},{data:p}]=await Promise.all([
       dq,
@@ -768,49 +802,113 @@ function CutiPeriods({profile,work}){
     setModalOpen(true)
   }
   function closePeriodModal(){ setModalOpen(false); setMsg('') }
+  function findDriverForImport(siteCode, nrp){
+    const normalizedSite = clean(siteCode).toUpperCase()
+    const normalizedNrp = normNrp(nrp)
+    if(!normalizedNrp) return null
+    const matches = drivers.filter(d => normNrp(d.nrp_driver) === normalizedNrp && (!normalizedSite || clean(d.sites?.site_code).toUpperCase() === normalizedSite))
+    return matches.length === 1 ? matches[0] : null
+  }
+  async function savePeriodPayload(payload){
+    const existing = periods.find(p =>
+      String(p.driver_id) === String(payload.driver_id) &&
+      String(p.masa_dinas_end_date || '') === String(payload.masa_dinas_end_date || '')
+    )
+    if(existing?.id) return supabase.from('drd_induction_periods').update(payload).eq('id', existing.id)
+    return supabase.from('drd_induction_periods').insert(payload)
+  }
   async function save(e){
     e.preventDefault()
     const d=drivers.find(x=>x.id===form.driver_id)
     if(!d) return setMsg('Driver belum dipilih.')
     if(!form.cuti_start_date || !form.onsite_date) return setMsg('Tanggal mulai cuti dan tanggal onsite wajib diisi.')
     const payload={driver_id:form.driver_id,site_id:d?.site_id,masa_dinas_end_date:d?.end_masa_dinas||null,cuti_start_date:form.cuti_start_date,onsite_date:form.onsite_date,status:'Open',updated_at:new Date().toISOString()}
-
-    // Hindari upsert ON CONFLICT karena database lama bisa belum punya unique constraint
-    // pada kombinasi driver_id + masa_dinas_end_date. Flow ini lebih aman untuk project
-    // yang sudah beberapa kali migrasi SQL.
-    const existing = periods.find(p =>
-      String(p.driver_id) === String(payload.driver_id) &&
-      String(p.masa_dinas_end_date || '') === String(payload.masa_dinas_end_date || '')
-    )
-
-    let error = null
-    if (existing?.id) {
-      const res = await supabase.from('drd_induction_periods').update(payload).eq('id', existing.id)
-      error = res.error
-    } else {
-      const res = await supabase.from('drd_induction_periods').insert(payload)
-      error = res.error
-    }
-
+    const {error}=await savePeriodPayload(payload)
     if(error){
       setMsg(error.message)
     } else {
-      setMsg('Periode cuti/onsite berhasil disimpan. Card outstanding akan hilang untuk periode masa dinas ini.')
+      setMsg('Periode cuti/onsite berhasil disimpan.')
       setForm({driver_id:'',cuti_start_date:'',onsite_date:''})
       setModalOpen(false)
     }
     load()
   }
+  function downloadPeriodTemplate(){
+    const sample = drivers.slice(0, Math.min(drivers.length, 100)).map(d=>({
+      site_code:d.sites?.site_code||'',
+      nrp_driver:d.nrp_driver||'',
+      nama_driver:d.nama_driver||'',
+      masa_dinas_end_date:d.end_masa_dinas||'',
+      cuti_start_date:'',
+      onsite_date:'',
+      status:'Open'
+    }))
+    templateXlsx('template-periode-cuti-onsite-driver.xlsx', sample.length ? sample : [{site_code:'VIPO',nrp_driver:'VI260074',nama_driver:'Nama Driver',masa_dinas_end_date:'2026-06-01',cuti_start_date:'2026-06-02',onsite_date:'2026-06-10',status:'Open'}], ['masa_dinas_end_date','cuti_start_date','onsite_date'])
+  }
+  async function previewPeriodFile(file){
+    if(!file) return
+    setMsg('')
+    const rows=await readExcel(file)
+    const mapped=rows.map((r,i)=>{
+      const siteCode=clean(excelCell(r,['site_code','site','kode_site'])).toUpperCase()
+      const nrp=normNrp(excelCell(r,['nrp_driver','nrp','nrp driver']))
+      const cuti=excelDateToIso(excelCell(r,['cuti_start_date','mulai_cuti','tanggal_cuti','cuti mulai','mulai cuti']))
+      const onsite=excelDateToIso(excelCell(r,['onsite_date','tanggal_onsite','onsite','tanggal onsite']))
+      const driver=findDriverForImport(siteCode,nrp)
+      const masa=excelDateToIso(excelCell(r,['masa_dinas_end_date','end_masa_dinas','end masa dinas','masa dinas end'])) || driver?.end_masa_dinas || ''
+      const status=clean(excelCell(r,['status','status_periode'])) || 'Open'
+      const errors=[]
+      if(!nrp) errors.push('nrp_driver wajib')
+      if(!driver) errors.push(siteCode ? 'NRP tidak ditemukan pada site tersebut' : 'NRP tidak ditemukan atau tidak unik')
+      if(!cuti || !isIsoDateString(cuti)) errors.push('cuti_start_date tidak valid')
+      if(!onsite || !isIsoDateString(onsite)) errors.push('onsite_date tidak valid')
+      if(masa && !isIsoDateString(masa)) errors.push('masa_dinas_end_date tidak valid')
+      if(status && !['Open','Closed'].includes(status)) errors.push('status hanya Open atau Closed')
+      return {
+        row:i+2,
+        site_code:siteCode || driver?.sites?.site_code || '',
+        nama_driver:driver?.nama_driver || clean(excelCell(r,['nama_driver','nama driver','driver'])) || '',
+        nrp_driver:nrp,
+        masa_dinas_end_date:masa,
+        cuti_start_date:cuti,
+        onsite_date:onsite,
+        status,
+        driver_id:driver?.id || '',
+        site_id:driver?.site_id || '',
+        error:errors.join('; '),
+        status_validasi:errors.length?'ERROR':'VALID'
+      }
+    })
+    setPeriodPreview(mapped)
+  }
+  async function importPeriodRows(){
+    const valid=periodPreview.filter(r=>r.status_validasi==='VALID')
+    if(!valid.length) return setMsg('Tidak ada baris valid untuk diimport.')
+    setImportingPeriod(true); setMsg('')
+    let ok=0, failed=0
+    for(const r of valid){
+      const payload={driver_id:r.driver_id,site_id:r.site_id,masa_dinas_end_date:r.masa_dinas_end_date||null,cuti_start_date:r.cuti_start_date,onsite_date:r.onsite_date,status:r.status||'Open',updated_at:new Date().toISOString()}
+      const {error}=await savePeriodPayload(payload)
+      if(error) failed++; else ok++
+    }
+    setMsg(`Import periode selesai. Berhasil ${ok} baris${failed?`, gagal ${failed} baris`:''}.`)
+    setPeriodPreview([]); setImportingPeriod(false); load()
+  }
   const rows=periods.map(p=>({driver:p.drivers?.nama_driver,nrp:p.drivers?.nrp_driver,site:p.drivers?.sites?.site_code,end_masa_dinas:p.masa_dinas_end_date||p.drivers?.end_masa_dinas||'-',cuti_mulai:p.cuti_start_date||'-',onsite:p.onsite_date||'-',status:p.status,alert:isOnsiteDue(p)?'Open - Driver wajib induksi':'-'}))
   return <div className="stack">
-    <Panel title="Outstanding Input Periode Cuti" desc="Card akan muncul saat masa dinas driver habis dan belum ada input tanggal cuti + tanggal onsite untuk periode masa dinas tersebut. Setelah diisi, card akan hilang sampai ada periode masa dinas berikutnya.">
+    <Panel title="Outstanding Input Periode Cuti" desc="Card akan muncul saat masa dinas driver habis dan belum ada input tanggal cuti + tanggal onsite untuk periode masa dinas tersebut.">
       {outstanding.length ? <div className="cards-grid">{outstanding.map(d=><div className="card" key={d.id}><h3>{d.nama_driver}</h3><p><b>NRP:</b> {d.nrp_driver}</p><p><b>Site:</b> {d.sites?.site_code || '-'}</p><p><b>End Masa Dinas:</b> {d.end_masa_dinas}</p><button onClick={()=>openPeriodModal(d)}>Isi Periode Cuti</button></div>)}</div> : <p className="message">Tidak ada outstanding input periode cuti saat ini.</p>}
     </Panel>
-    <Panel title="Set Periode Cuti & Onsite" desc="Input tanggal cuti dan onsite sekarang memakai box modal supaya form tidak memenuhi halaman. Saat onsite sudah tiba dan induksi belum closed, status dihitung Open Induksi." action={<button onClick={()=>openPeriodModal()}>+ Tambah Periode</button>}>
+    <Panel title="Set Periode Cuti & Onsite" desc="Input manual tetap tersedia. Untuk update banyak driver, gunakan import Excel di bawah." action={<button onClick={()=>openPeriodModal()}>+ Tambah Periode</button>}>
       {msg&&<p className="message">{msg}</p>}
       <p className="muted">Klik kartu outstanding atau tombol tambah periode untuk membuka form input periode cuti.</p>
     </Panel>
-    <Panel title="Row Data Periode Cuti & Induksi" action={<button onClick={()=>exportXlsx('periode-cuti-induksi.xlsx',rows)}><Download size={16}/> Export</button>}><DataTable rows={rows}/></Panel>
+    <Panel title="Import Periode Cuti & Onsite Excel" desc="Admin bisa setting tanggal cuti dan onsite secara massal. Format tanggal fleksibel: yyyy-mm-dd, dd/mm/yyyy, mm/dd/yy, atau date asli Excel.">
+      <div className="import-actions"><button className="secondary" disabled={importingPeriod} onClick={downloadPeriodTemplate}><Download size={16}/> Download Template</button><label className="upload-line"><Upload size={16}/> Upload Excel<input type="file" accept=".xlsx,.xls" disabled={importingPeriod} onChange={e=>previewPeriodFile(e.target.files?.[0])}/></label>{periodPreview.length>0&&<button disabled={importingPeriod || periodPreview.every(r=>r.status_validasi!=='VALID')} onClick={importPeriodRows}>{importingPeriod?'Mengimport...':'Submit Import Valid'}</button>}{periodPreview.length>0&&<button className="secondary" disabled={importingPeriod} onClick={()=>setPeriodPreview([])}>Batal Preview</button>}</div>
+      {periodPreview.length>0&&<div className="summary-strip"><span><b>{periodPreview.length}</b> Total Baris</span><span><b>{periodPreview.filter(r=>r.status_validasi==='VALID').length}</b> Valid</span><span><b>{periodPreview.filter(r=>r.status_validasi==='ERROR').length}</b> Error</span></div>}
+      {periodPreview.length>0&&<div className="upload-preview"><DataTable rows={periodPreview.map(({driver_id,site_id,...r})=>r)}/></div>}
+    </Panel>
+    <Panel title="Row Data Periode Cuti & Induksi" action={<button onClick={()=>exportXlsx('periode-cuti-induksi.xlsx',rows)}><Download size={16}/> Export</button>}><ScrollTable rows={rows} height={420}/></Panel>
 
     {modalOpen && <div className="modal-backdrop" onClick={closePeriodModal}>
       <div className="modal-card period-modal" onClick={e=>e.stopPropagation()}>
@@ -833,8 +931,25 @@ function CutiPeriods({profile,work}){
 
 function DriverTest({profile}){ return <DriverExam profile={profile} type="DRD" /> }
 function DriverInduction({profile}){ return <DriverExam profile={profile} type="Induksi Driver" /> }
+function ExamReviewModal({review,onClose,onRetry}){
+  if(!review) return null
+  const pass = review.status === 'Lulus'
+  return <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-card exam-review-modal" onClick={e=>e.stopPropagation()}>
+      <div className="modal-head"><div><h2>Review {review.type}</h2><p className="muted">Hasil pengerjaan terakhir.</p></div><button type="button" className="secondary icon-btn" onClick={onClose}>×</button></div>
+      <div className={pass?'exam-score-card pass':'exam-score-card fail'}>
+        <div><span>Nilai</span><strong>{pass ? 100 : review.score}</strong></div>
+        <div>{pass ? <CheckCircle2 size={54}/> : <AlertTriangle size={54}/>}</div>
+      </div>
+      <div className="summary-strip"><span><b>{review.correct}</b> Benar</span><span><b>{review.total-review.correct}</b> Salah</span><span><b>{review.total}</b> Total Soal</span><span><b>{review.status}</b> Status</span></div>
+      {pass ? <p className="message">Semua jawaban benar. {review.type==='Induksi Driver' ? `Induksi closed dan masa dinas diperpanjang sampai ${review.newEndMasaDinas || '-'}.` : `DRD berlaku sampai ${review.validUntil || '-'}.`}</p> : <div className="wrong-review-list"><h3>Soal yang masih salah</h3><p className="muted">Sistem hanya menampilkan nomor soal dan pilihan yang kamu jawab. Jawaban benar tidak ditampilkan.</p>{review.wrongItems.map(item=><div className="wrong-review-item" key={item.nomor}><b>Soal {item.nomor}</b><p>{item.question_text}</p><span>Jawaban kamu: {optionText(item.selected_answer)}</span></div>)}</div>}
+      <div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Tutup</button>{!pass&&<button type="button" onClick={onRetry}>Ulangi Tes</button>}</div>
+    </div>
+  </div>
+}
+
 function DriverExam({profile,type}){
-  const [driver,setDriver]=useState(null), [questions,setQuestions]=useState([]), [active,setActive]=useState(false), [answers,setAnswers]=useState({}), [idx,setIdx]=useState(0), [msg,setMsg]=useState(''), [video,setVideo]=useState(null), [videoDone,setVideoDone]=useState(false), [period,setPeriod]=useState(null), [latestDrd,setLatestDrd]=useState(null)
+  const [driver,setDriver]=useState(null), [questions,setQuestions]=useState([]), [active,setActive]=useState(false), [answers,setAnswers]=useState({}), [idx,setIdx]=useState(0), [msg,setMsg]=useState(''), [video,setVideo]=useState(null), [videoDone,setVideoDone]=useState(false), [period,setPeriod]=useState(null), [latestDrd,setLatestDrd]=useState(null), [review,setReview]=useState(null)
   useEffect(()=>{load()},[profile.email,type])
   async function load(){
     const {data:d}=await supabase.from('drivers').select('*').eq('email',profile.email).maybeSingle(); setDriver(d)
@@ -844,12 +959,31 @@ function DriverExam({profile,type}){
   }
   const drdValid=latestDrd?.status==='Lulus' && (!latestDrd.valid_until || latestDrd.valid_until>=today())
   const canShow = type==='DRD' ? !drdValid : !!period
-  async function start(){ if(type==='Induksi Driver' && !videoDone) return setMsg('Tonton video induksi sampai selesai terlebih dahulu.'); const {data:q,error}=await supabase.from('drd_questions').select('*').eq('category',type).eq('status','Aktif').order('created_at'); if(error)return setMsg(error.message); if(!q?.length)return setMsg(`Bank soal kategori ${type} masih kosong.`); setQuestions(q); setActive(true); setAnswers({}); setIdx(0); setMsg('') }
-  async function submit(){ const total=questions.length, correct=questions.filter(q=>answers[q.id]===q.correct_answer).length, pass=correct===total, score=total?Math.round(correct/total*100):0; const {data:att,error}=await supabase.from('drd_attempts').insert({assignment_id:null,driver_id:driver.id,package_id:null,test_type:type,induction_period_id:period?.id||null,submitted_at:new Date().toISOString(),score,total_questions:total,correct_count:correct,status:pass?'Lulus':'Tidak Lulus',valid_until:type==='DRD'&&pass?months(6):null}).select().single(); if(error)return setMsg(error.message); await supabase.from('drd_answers').insert(questions.map(q=>({attempt_id:att.id,question_id:q.id,selected_answer:answers[q.id]||null,is_correct:answers[q.id]===q.correct_answer}))); if(type==='Induksi Driver'&&pass&&period) await supabase.from('drd_induction_periods').update({status:'Closed',completed_at:new Date().toISOString()}).eq('id',period.id); setMsg(pass ? (type==='DRD'?`Lulus DRD. Berlaku sampai ${months(6)}.`:'Induksi closed untuk periode ini.') : `Belum lulus. Benar ${correct}/${total}. Silakan ulangi ${type}.`); setActive(false); setQuestions([]); load() }
+  async function start(){ if(type==='Induksi Driver' && !videoDone) return setMsg('Tonton video induksi sampai selesai terlebih dahulu.'); const {data:q,error}=await supabase.from('drd_questions').select('*').eq('category',type).eq('status','Aktif').order('created_at'); if(error)return setMsg(error.message); if(!q?.length)return setMsg(`Bank soal kategori ${type} masih kosong.`); setQuestions(q); setActive(true); setAnswers({}); setIdx(0); setMsg(''); setReview(null) }
+  async function submit(){
+    const total=questions.length
+    const correct=questions.filter(q=>answers[q.id]===q.correct_answer).length
+    const pass=correct===total
+    const score=total?Math.round(correct/total*100):0
+    const validUntil=type==='DRD'&&pass?months(6):null
+    const completedIso=today()
+    const newEndMasaDinas=type==='Induksi Driver'&&pass?addDaysIso(completedIso,70):null
+    const wrongItems=questions.map((q,i)=>({nomor:i+1,question_text:q.question_text,selected_answer:answers[q.id]||'' ,is_correct:answers[q.id]===q.correct_answer})).filter(x=>!x.is_correct)
+    const {data:att,error}=await supabase.from('drd_attempts').insert({assignment_id:null,driver_id:driver.id,package_id:null,test_type:type,induction_period_id:period?.id||null,submitted_at:new Date().toISOString(),score,total_questions:total,correct_count:correct,status:pass?'Lulus':'Tidak Lulus',valid_until:validUntil}).select().single()
+    if(error)return setMsg(error.message)
+    await supabase.from('drd_answers').insert(questions.map(q=>({attempt_id:att.id,question_id:q.id,selected_answer:answers[q.id]||null,is_correct:answers[q.id]===q.correct_answer})))
+    if(type==='Induksi Driver'&&pass&&period){
+      await supabase.from('drd_induction_periods').update({status:'Closed',completed_at:new Date().toISOString(),updated_at:new Date().toISOString()}).eq('id',period.id)
+      await supabase.from('drivers').update({mulai_dinas:completedIso,end_masa_dinas:newEndMasaDinas,updated_at:new Date().toISOString()}).eq('id',driver.id)
+    }
+    setReview({type,score:pass?100:score,total,correct,status:pass?'Lulus':'Tidak Lulus',wrongItems,validUntil,newEndMasaDinas})
+    setMsg(pass ? (type==='DRD'?`Lulus DRD. Berlaku sampai ${validUntil}.`:`Induksi closed. Masa dinas diperpanjang sampai ${newEndMasaDinas}.`) : `Belum lulus. Benar ${correct}/${total}. Silakan cek review dan ulangi ${type}.`)
+    setActive(false); setQuestions([]); load()
+  }
   if(!driver)return <Panel title={type}><p className="message error">Email login belum terhubung ke Master Driver.</p></Panel>
   if(active){ const q=questions[idx]; return <Panel title={`${type} - Soal ${idx+1}/${questions.length}`} desc="Passing grade 100%. Semua jawaban harus benar."><h2>{q.question_text}</h2>{q.image_url&&<img src={q.image_url} alt="Foto soal" style={questionImageStyle()}/>} { [['A',q.option_a],['B',q.option_b],['C',q.option_c],['D',q.option_d]].map(([k,v])=><div key={k} className={'option '+(answers[q.id]===k?'selected':'')} onClick={()=>setAnswers({...answers,[q.id]:k})}><b>{k}.</b> {v}</div>)}<br/><div className="actions"><button className="secondary" disabled={idx===0} onClick={()=>setIdx(idx-1)}>Sebelumnya</button><button className="secondary" disabled={idx===questions.length-1} onClick={()=>setIdx(idx+1)}>Selanjutnya</button><button disabled={Object.keys(answers).length<questions.length} onClick={submit}>Submit</button></div></Panel> }
-  if(!canShow) return <Panel title={type}>{type==='DRD'?<p className="message">Status DRD masih valid. Tidak ada tes aktif.</p>:<p className="message">Tidak ada induksi aktif. Induksi muncul saat driver sudah onsite setelah cuti dan periode induksi masih Open.</p>}</Panel>
-  return <Panel title={type} desc={type==='DRD'?'Status driver belum DRD / DRD expired, maka tombol mulai tes otomatis muncul.':'Tonton video sampai selesai, lalu kerjakan soal induksi. Jika ada jawaban salah, induksi harus diulang.'}>{msg&&<p className="message">{msg}</p>}{type==='Induksi Driver'&&<div className="stack"><div className="video-box">{video?.video_url?<video width="100%" controls onEnded={()=>setVideoDone(true)}><source src={video.video_url}/></video>:<p className="message error">Video induksi aktif belum tersedia. Hubungi Administrator.</p>}</div>{video&&badge(videoDone?'Video Selesai':'Wajib Tonton Video')}</div>}<br/><button disabled={type==='Induksi Driver' && (!videoDone || !video)} onClick={start}>Mulai {type}</button></Panel>
+  if(!canShow) return <Panel title={type}>{review&&<ExamReviewModal review={review} onClose={()=>setReview(null)} onRetry={start}/>} {type==='DRD'?<p className="message">Status DRD masih valid. Tidak ada tes aktif.</p>:<p className="message">Tidak ada induksi aktif. Induksi muncul saat driver sudah onsite setelah cuti dan periode induksi masih Open.</p>}</Panel>
+  return <Panel title={type} desc={type==='DRD'?'Status driver belum DRD / DRD expired, maka tombol mulai tes otomatis muncul.':'Tonton video sampai selesai, lalu kerjakan soal induksi. Jika ada jawaban salah, induksi harus diulang.'}>{review&&<ExamReviewModal review={review} onClose={()=>setReview(null)} onRetry={start}/>} {msg&&<p className="message">{msg}</p>}{type==='Induksi Driver'&&<div className="stack"><div className="video-box">{video?.video_url?<video width="100%" controls onEnded={()=>setVideoDone(true)}><source src={video.video_url}/></video>:<p className="message error">Video induksi aktif belum tersedia. Hubungi Administrator.</p>}</div>{video&&badge(videoDone?'Video Selesai':'Wajib Tonton Video')}</div>}<br/><button disabled={type==='Induksi Driver' && (!videoDone || !video)} onClick={start}>Mulai {type}</button></Panel>
 }
 
 function Results({profile,work}){
