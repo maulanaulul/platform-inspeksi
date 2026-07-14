@@ -258,3 +258,56 @@ select[multiple] option{padding:8px 10px;border-radius:10px;margin:2px 0}
 .wrong-review-item{background:#fff;border:1px solid #ffedd5;border-radius:18px;padding:14px 16px;margin-top:10px}
 .wrong-review-item b{color:#9a3412}.wrong-review-item p{margin:6px 0;color:#0f172a;font-weight:800}.wrong-review-item span{display:inline-flex;background:#fff7ed;border:1px solid #fed7aa;border-radius:999px;padding:6px 10px;font-weight:900;color:#9a3412}
 @media(max-width:640px){.exam-score-card strong{font-size:54px}.exam-score-card{padding:18px;border-radius:22px}.exam-review-modal{padding:20px}}
+
+/* V61 DRD dashboard multi-site filter polish */
+.dashboard-filter-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:end}
+.dashboard-filter-grid.with-site{grid-template-columns:minmax(220px,1fr) minmax(220px,1fr) minmax(360px,1.3fr) 180px}
+.reset-filter-btn{min-height:54px;width:100%}
+.multi-site-picker{position:relative;width:100%}
+.multi-site-label-row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:7px;font-size:13px;font-weight:950;color:#0f172a}
+.multi-site-label-row small{font-size:12px;color:#64748b;font-weight:900}
+.multi-site-trigger{width:100%;min-height:54px;border:1px solid #dbe7f6;background:#fff;color:#0f172a;border-radius:16px;box-shadow:none;padding:8px 12px;display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left}
+.multi-site-trigger:hover{transform:none;border-color:#93c5fd;background:#f8fbff}
+.multi-site-trigger-copy{min-width:0;display:grid;gap:3px;justify-items:start}
+.multi-site-trigger-copy b{font-size:14px;color:#0f172a}
+.multi-site-trigger-copy small{font-size:11px;color:#64748b;font-weight:800}
+.multi-site-chips{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.multi-site-chips span{display:inline-flex;align-items:center;min-height:24px;border-radius:999px;padding:4px 9px;background:#eff6ff;border:1px solid #bfdbfe;color:#1d4ed8;font-size:12px;font-weight:950}
+.multi-site-arrow{font-size:20px;line-height:1;color:#64748b;transition:transform .18s ease}.multi-site-arrow.open{transform:rotate(180deg)}
+.multi-site-dropdown{position:absolute;left:0;right:0;top:calc(100% + 10px);z-index:60;background:#fff;border:1px solid #dbe7f6;border-radius:22px;box-shadow:0 22px 60px rgba(15,23,42,.16);padding:12px;overflow:hidden}
+.multi-site-tools{display:grid;gap:10px;margin-bottom:10px}
+.multi-site-tools input{min-height:44px;border-radius:14px;background:#f8fbff;border:1px solid #dbe7f6;font-size:13px}
+.multi-site-tool-buttons{display:flex;gap:8px;flex-wrap:wrap}.multi-site-tool-buttons button{min-height:36px;padding:8px 12px}
+.multi-site-options{display:grid;gap:6px;max-height:300px;overflow:auto;padding-right:4px}
+.multi-site-option{width:100%;display:grid;grid-template-columns:26px 1fr;gap:10px;align-items:center;text-align:left;background:#fff;color:#0f172a;border:1px solid transparent;border-radius:14px;padding:10px;box-shadow:none}
+.multi-site-option:hover{transform:none;background:#f8fbff;border-color:#dbeafe}
+.multi-site-option.selected{background:#eff6ff;border-color:#93c5fd}
+.multi-site-check{width:24px;height:24px;border-radius:9px;border:1px solid #bfdbfe;display:grid;place-items:center;background:#fff;color:#2563eb;font-weight:950}
+.multi-site-option.selected .multi-site-check{background:#2563eb;color:#fff;border-color:#2563eb}
+.multi-site-option b{display:block;font-size:14px;color:#0f172a}.multi-site-option small{display:block;margin-top:2px;color:#64748b;font-size:12px;font-weight:800}
+.multi-site-footer{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;padding-top:12px;border-top:1px solid #e5eefb;color:#64748b;font-size:12px;font-weight:900}
+.multi-site-footer button{min-height:40px;padding:9px 14px}.empty-site-result{margin:8px 4px}
+@media(max-width:1180px){.dashboard-filter-grid,.dashboard-filter-grid.with-site{grid-template-columns:1fr 1fr}.multi-site-picker{grid-column:1/-1}.reset-filter-btn{grid-column:1/-1}}
+@media(max-width:640px){.dashboard-filter-grid,.dashboard-filter-grid.with-site{grid-template-columns:1fr}.multi-site-dropdown{position:static;margin-top:10px}.multi-site-footer{align-items:flex-start;flex-direction:column}.multi-site-footer button{width:100%}}
+
+
+/* V62 multi-site picker fix: static dropdown so options are never clipped by panel overflow */
+.multi-site-picker{position:relative;width:100%;overflow:visible}
+.multi-site-picker.open{z-index:20}
+.multi-site-dropdown{position:static!important;left:auto!important;right:auto!important;top:auto!important;z-index:auto!important;margin-top:12px;background:linear-gradient(180deg,#fff,#f8fbff);border:1px solid #dbe7f6;border-radius:22px;box-shadow:0 18px 42px rgba(15,23,42,.10);padding:14px;overflow:visible!important}
+.multi-site-search{display:flex;align-items:center;gap:9px;background:#f8fbff;border:1px solid #dbe7f6;border-radius:14px;padding:0 12px;min-height:46px;color:#64748b}
+.multi-site-search input{border:0!important;background:transparent!important;box-shadow:none!important;padding:0!important;min-height:42px}
+.multi-site-options{grid-template-columns:repeat(2,minmax(0,1fr));max-height:280px!important;overflow:auto!important;padding-right:6px!important}
+.multi-site-option{min-height:56px}
+.multi-site-footer{background:#fff;border:1px solid #e5eefb;border-radius:16px;padding:10px 12px!important;margin-top:12px!important}
+.dashboard-filter-grid.with-site{align-items:start}
+
+/* V62 outstanding periode cuti list */
+.outstanding-list-toolbar{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:6px 0 14px;flex-wrap:wrap}
+.outstanding-live-search{flex:1 1 420px;margin:0!important;max-width:620px}
+.outstanding-count-pill{display:inline-flex;align-items:center;gap:6px;border:1px solid #dbeafe;background:#eff6ff;color:#1e3a8a;border-radius:999px;padding:10px 14px;font-size:13px;font-weight:900}
+.outstanding-period-scroll{max-height:460px;overflow:auto;border:1px solid #dbeafe;border-radius:20px;background:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.7)}
+.outstanding-period-table{min-width:900px}
+.outstanding-period-table thead th{position:sticky;top:0;z-index:2;background:#f8fbff}
+.outstanding-period-table td:first-child b{font-size:14px;color:#061027}.no-search-result{padding:18px;margin:0}
+@media(max-width:900px){.multi-site-options{grid-template-columns:1fr}.outstanding-list-toolbar{align-items:stretch}.outstanding-count-pill{justify-content:center}.outstanding-live-search{max-width:none}}

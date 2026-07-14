@@ -281,14 +281,69 @@ function ScrollTable({rows, actions, height=420}){
 }
 
 
+function MultiSitePicker({ sites=[], value=[], onChange }){
+  const selectedIds = Array.isArray(value) ? value.map(String) : (value ? [String(value)] : [])
+  const [open,setOpen] = useState(false)
+  const [q,setQ] = useState('')
+  const selectedSites = sites.filter(s => selectedIds.includes(String(s.id)))
+  const selectedSet = new Set(selectedIds)
+  const search = q.trim().toLowerCase()
+  const filteredSites = sites.filter(s => {
+    if(!search) return true
+    return `${s.site_code || ''} ${s.site_name || ''}`.toLowerCase().includes(search)
+  })
+  function toggle(id){
+    const sid = String(id)
+    const next = selectedSet.has(sid) ? selectedIds.filter(x => x !== sid) : [...selectedIds, sid]
+    onChange(next)
+  }
+  return <div className={open?'multi-site-picker open':'multi-site-picker'}>
+    <div className="multi-site-label-row">
+      <span>Site</span>
+      <small>Bisa pilih lebih dari satu</small>
+    </div>
+    <button type="button" className="multi-site-trigger" onClick={()=>setOpen(!open)}>
+      <div className="multi-site-trigger-copy">
+        {selectedSites.length ? <div className="multi-site-chips">
+          {selectedSites.slice(0,5).map(s=><span key={s.id}>{s.site_code}</span>)}
+          {selectedSites.length>5&&<span>+{selectedSites.length-5}</span>}
+        </div> : <b>Semua site aktif</b>}
+        <small>{selectedSites.length ? `${selectedSites.length} site dipilih` : 'Kosong berarti semua site ditampilkan'}</small>
+      </div>
+      <span className={open?'multi-site-arrow open':'multi-site-arrow'}>⌄</span>
+    </button>
+    {open&&<div className="multi-site-dropdown">
+      <div className="multi-site-tools">
+        <div className="multi-site-search"><Search size={16}/><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Cari site, contoh ARIA atau KIDE..." /></div>
+        <div className="multi-site-tool-buttons">
+          <button type="button" className="secondary small" onClick={()=>onChange(sites.map(s=>String(s.id)))}>Pilih Semua</button>
+          <button type="button" className="secondary small" onClick={()=>onChange([])}>Kosongkan</button>
+        </div>
+      </div>
+      <div className="multi-site-options">
+        {filteredSites.length ? filteredSites.map(s => {
+          const checked = selectedSet.has(String(s.id))
+          return <button type="button" key={s.id} className={checked?'multi-site-option selected':'multi-site-option'} onClick={()=>toggle(s.id)}>
+            <span className="multi-site-check">{checked ? '✓' : ''}</span>
+            <span><b>{s.site_code}</b><small>{s.site_name}</small></span>
+          </button>
+        }) : <p className="muted empty-site-result">Site tidak ditemukan.</p>}
+      </div>
+      <div className="multi-site-footer">
+        <span>{selectedSites.length ? `${selectedSites.length} site aktif difilter` : 'Semua site aktif ditampilkan'}</span>
+        <button type="button" onClick={()=>setOpen(false)}>Terapkan</button>
+      </div>
+    </div>}
+  </div>
+}
+
 function DashboardDateFilter({ dateFrom, dateTo, setDateFrom, setDateTo, onClear, sites=[], siteFilter=[], setSiteFilter, showSiteFilter=false }) {
-  const selectedIds = Array.isArray(siteFilter) ? siteFilter : (siteFilter ? [siteFilter] : [])
-  return <Panel title="Filter Dashboard" desc="KPI, achievement, chart, dan row data dashboard mengikuti filter tanggal dan site ini.">
-    <div className="form-grid">
+  return <Panel title="Filter Dashboard" desc="Pilih tanggal dan site yang ingin ditampilkan.">
+    <div className={showSiteFilter ? 'dashboard-filter-grid with-site' : 'dashboard-filter-grid'}>
       <label>Dari Tanggal<input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} /></label>
       <label>Sampai Tanggal<input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} /></label>
-      {showSiteFilter&&<label>Site <span className="muted">(bisa pilih banyak)</span><select multiple size={Math.min(Math.max(sites.length, 3), 8)} value={selectedIds} onChange={e=>setSiteFilter(Array.from(e.target.selectedOptions).map(o=>o.value))}>{sites.map(s=><option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}</select><small className="muted">Kosongkan pilihan untuk menampilkan semua site.</small></label>}
-      <button type="button" className="secondary" onClick={onClear}>Reset Filter</button>
+      {showSiteFilter&&<MultiSitePicker sites={sites} value={siteFilter} onChange={setSiteFilter}/>}
+      <button type="button" className="secondary reset-filter-btn" onClick={onClear}>Reset Filter</button>
     </div>
   </Panel>
 }
@@ -776,7 +831,7 @@ function MasterDriver({profile,work}){
   </div>
 }
 function CutiPeriods({profile,work}){
-  const [drivers,setDrivers]=useState([]), [periods,setPeriods]=useState([]), [form,setForm]=useState({driver_id:'',cuti_start_date:'',onsite_date:''}), [msg,setMsg]=useState(''), [modalOpen,setModalOpen]=useState(false), [periodPreview,setPeriodPreview]=useState([]), [importingPeriod,setImportingPeriod]=useState(false)
+  const [drivers,setDrivers]=useState([]), [periods,setPeriods]=useState([]), [form,setForm]=useState({driver_id:'',cuti_start_date:'',onsite_date:''}), [msg,setMsg]=useState(''), [modalOpen,setModalOpen]=useState(false), [periodPreview,setPeriodPreview]=useState([]), [importingPeriod,setImportingPeriod]=useState(false), [outstandingSearch,setOutstandingSearch]=useState('')
   useEffect(()=>{load()},[work.id])
   async function load(){
     let dq=supabase.from('drivers').select('*,sites(site_code,site_name)').eq('status','Aktif').order('nama_driver')
@@ -793,7 +848,14 @@ function CutiPeriods({profile,work}){
   function hasFilledPeriodForCurrentDinas(d){
     return periods.some(p=>p.driver_id===d.id && String(p.masa_dinas_end_date||p.drivers?.end_masa_dinas||'')===String(d.end_masa_dinas||'') && p.cuti_start_date && p.onsite_date)
   }
-  const outstanding=drivers.filter(d=>isExpired(d.end_masa_dinas)&&!hasFilledPeriodForCurrentDinas(d))
+  const outstanding=drivers
+    .filter(d=>isExpired(d.end_masa_dinas)&&!hasFilledPeriodForCurrentDinas(d))
+    .sort((a,b)=>`${a.sites?.site_code||''} ${a.nama_driver||''}`.localeCompare(`${b.sites?.site_code||''} ${b.nama_driver||''}`))
+  const outstandingQuery = outstandingSearch.trim().toLowerCase()
+  const filteredOutstanding = outstanding.filter(d=>{
+    if(!outstandingQuery) return true
+    return [d.nama_driver,d.nrp_driver,d.sites?.site_code,d.sites?.site_name,d.end_masa_dinas].some(v=>String(v||'').toLowerCase().includes(outstandingQuery))
+  })
   const selectedDriver=drivers.find(x=>x.id===form.driver_id)
   function openPeriodModal(d=null){
     setMsg('')
@@ -896,8 +958,25 @@ function CutiPeriods({profile,work}){
   }
   const rows=periods.map(p=>({driver:p.drivers?.nama_driver,nrp:p.drivers?.nrp_driver,site:p.drivers?.sites?.site_code,end_masa_dinas:p.masa_dinas_end_date||p.drivers?.end_masa_dinas||'-',cuti_mulai:p.cuti_start_date||'-',onsite:p.onsite_date||'-',status:p.status,alert:isOnsiteDue(p)?'Open - Driver wajib induksi':'-'}))
   return <div className="stack">
-    <Panel title="Outstanding Input Periode Cuti" desc="Card akan muncul saat masa dinas driver habis dan belum ada input tanggal cuti + tanggal onsite untuk periode masa dinas tersebut.">
-      {outstanding.length ? <div className="cards-grid">{outstanding.map(d=><div className="card" key={d.id}><h3>{d.nama_driver}</h3><p><b>NRP:</b> {d.nrp_driver}</p><p><b>Site:</b> {d.sites?.site_code || '-'}</p><p><b>End Masa Dinas:</b> {d.end_masa_dinas}</p><button onClick={()=>openPeriodModal(d)}>Isi Periode Cuti</button></div>)}</div> : <p className="message">Tidak ada outstanding input periode cuti saat ini.</p>}
+    <Panel title="Outstanding Input Periode Cuti" desc="Driver yang masa dinasnya habis dan belum punya tanggal cuti + onsite.">
+      <div className="outstanding-list-toolbar">
+        <div className="table-search outstanding-live-search"><Search size={16}/><input placeholder="Cari nama, NRP, site, atau end masa dinas..." value={outstandingSearch} onChange={e=>setOutstandingSearch(e.target.value)}/></div>
+        <span className="outstanding-count-pill"><b>{filteredOutstanding.length}</b> dari {outstanding.length} outstanding</span>
+      </div>
+      {outstanding.length ? <div className="outstanding-period-scroll">
+        <table className="table outstanding-period-table">
+          <thead><tr><th>Nama Driver</th><th>NRP</th><th>Site</th><th>End Masa Dinas</th><th>Status</th><th>Aksi</th></tr></thead>
+          <tbody>{filteredOutstanding.map(d=><tr key={d.id}>
+            <td><b>{d.nama_driver}</b></td>
+            <td>{d.nrp_driver}</td>
+            <td>{d.sites?.site_code || '-'}</td>
+            <td>{d.end_masa_dinas || '-'}</td>
+            <td>{badge('Habis')}</td>
+            <td><button className="small" onClick={()=>openPeriodModal(d)}>Isi Periode</button></td>
+          </tr>)}</tbody>
+        </table>
+        {!filteredOutstanding.length&&<p className="muted no-search-result">Tidak ada outstanding sesuai pencarian.</p>}
+      </div> : <p className="message">Tidak ada outstanding input periode cuti saat ini.</p>}
     </Panel>
     <Panel title="Set Periode Cuti & Onsite" desc="Input manual tetap tersedia. Untuk update banyak driver, gunakan import Excel di bawah." action={<button onClick={()=>openPeriodModal()}>+ Tambah Periode</button>}>
       {msg&&<p className="message">{msg}</p>}
