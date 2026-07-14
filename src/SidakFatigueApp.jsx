@@ -98,6 +98,22 @@ function normEmail(v){ return cleanText(v).toLowerCase() }
 function normCode(v){ return cleanText(v).toUpperCase() }
 function normNrp(v){ return cleanText(v).replace(/\s+/g, '').toUpperCase() }
 function sameNrp(a,b){ return normNrp(a) === normNrp(b) }
+
+async function fetchAllRows(table, select='*', buildQuery=null, pageSize=1000){
+  const all = []
+  let from = 0
+  while(true){
+    let query = supabase.from(table).select(select)
+    if(buildQuery) query = buildQuery(query)
+    const { data, error } = await query.range(from, from + pageSize - 1)
+    if(error) throw error
+    const chunk = data || []
+    all.push(...chunk)
+    if(chunk.length < pageSize) break
+    from += pageSize
+  }
+  return all
+}
 function isValidEmail(v){ const e = normEmail(v); return !e || /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/.test(e) }
 function makeVendorCode(idx=0){ return `VEN-${Date.now().toString(36).toUpperCase()}-${String(idx+1).padStart(3,'0')}` }
 function excelDateToIso(v){
@@ -1093,30 +1109,46 @@ function FatiguePlans({ context, profile }) {
     setMessage('')
     try {
       const rows = (await parseExcelOrCsv(file)).map(normalizeRow)
-      const [{ data: allSites }, { data: allDrivers }] = await Promise.all([
-        supabase.from('sites').select('id,site_code'),
-        supabase.from('drivers').select('id,nama_driver,nrp_driver,site_id,status')
+      const [allSites, allDrivers] = await Promise.all([
+        fetchAllRows('sites', 'id,site_code,site_name', q => q.order('site_code')),
+        fetchAllRows('drivers', 'id,nama_driver,nrp_driver,site_id,status', q => q.order('nrp_driver'))
       ])
+      const driverBySiteAndNrp = new Map()
+      const driverByNrp = new Map()
+      ;(allDrivers || []).forEach(d => {
+        const key = normNrp(d.nrp_driver)
+        if(!key) return
+        if(d.site_id) driverBySiteAndNrp.set(`${d.site_id}::${key}`, d)
+        if(!driverByNrp.has(key)) driverByNrp.set(key, d)
+      })
+      const siteByCode = new Map((allSites || []).map(s => [normCode(s.site_code), s]))
+
       const mapped = rows.map((r,idx)=>{
         const siteCode = adminHO ? normCode(r.site_code) : context.sites?.site_code
         const nrp = cleanText(r.nrp_driver || r.nrp)
         const nrpKey = normNrp(nrp)
-        const site = (allSites || []).find(s => normCode(s.site_code) === siteCode)
-        const driverSameSite = (allDrivers || []).find(d => sameNrp(d.nrp_driver, nrp) && (!site || d.site_id === site.id))
-        const driverAnySite = (allDrivers || []).find(d => sameNrp(d.nrp_driver, nrp))
+        const site = siteByCode.get(siteCode)
+        const driverSameSite = site ? driverBySiteAndNrp.get(`${site.id}::${nrpKey}`) : null
+        const driverAnySite = driverByNrp.get(nrpKey)
         const driver = driverSameSite
         let error=''
         const bulan=Number(r.bulan), tahun=Number(r.tahun)
         if(!site) error='site_code tidak ditemukan'
         else if(!nrpKey) error='nrp_driver wajib'
-        else if(!driver && driverAnySite) error=`nrp_driver ditemukan, tetapi bukan di site ${siteCode}`
+        else if(!driver && driverAnySite) {
+          const actualSite = (allSites || []).find(s => s.id === driverAnySite.site_id)
+          error=`nrp_driver ditemukan, tetapi terdaftar di site ${actualSite?.site_code || 'lain'}, bukan ${siteCode}`
+        }
         else if(!driver) error='nrp_driver tidak ditemukan di Master Driver site tersebut'
         else if(driver.status && driver.status !== 'Aktif') error='driver ditemukan, tetapi status Master Driver tidak Aktif'
         else if(!bulan || bulan<1 || bulan>12) error='bulan wajib 1-12'
         else if(!tahun) error='tahun wajib'
         return { row:idx+2, site_code:siteCode, nrp_driver:nrp, nama_driver:driver?.nama_driver || '', bulan, tahun, status:cleanText(r.status)||'Planned', site_id:site?.id, driver_id:driver?.id, error }
       })
+      const validCount = mapped.filter(r=>!r.error).length
+      const errorCount = mapped.length - validCount
       setPreview(mapped)
+      setMessage(errorCount ? `Preview selesai: ${validCount} valid, ${errorCount} error. Baris valid tetap bisa diimport.` : `Preview selesai: ${validCount} baris valid.`)
     }catch(e){ setMessage(e.message) }
   }
   async function submitPlanImport(){
@@ -1140,7 +1172,7 @@ function FatiguePlans({ context, profile }) {
       {message && <p className="message">{message}</p>}
     </Panel>
     <Panel title="Import Plan Sidak Excel" desc="Download template .xlsx, isi daftar driver yang direncanakan, upload, preview, lalu submit.">
-      <div className="import-actions"><button className="secondary" onClick={()=>downloadTemplate('template-plan-sidak.xlsx', templateRows('plan'))}><Download size={16}/> Download Template Excel</button><label className="upload-line"><FileSpreadsheet/> Upload Excel<input type="file" accept=".xlsx,.xls" onChange={e=>previewPlans(e.target.files?.[0])}/></label>{preview.length>0 && <button onClick={submitPlanImport} disabled={preview.some(r=>r.error)}>Submit Import Valid</button>}</div>
+      <div className="import-actions"><button className="secondary" onClick={()=>downloadTemplate('template-plan-sidak.xlsx', templateRows('plan'))}><Download size={16}/> Download Template Excel</button><label className="upload-line"><FileSpreadsheet/> Upload Excel<input type="file" accept=".xlsx,.xls" onChange={e=>previewPlans(e.target.files?.[0])}/></label>{preview.length>0 && <button onClick={submitPlanImport} disabled={!preview.some(r=>!r.error)}>Submit {preview.filter(r=>!r.error).length} Baris Valid</button>}</div>
       {preview.length>0 && <PreviewTable rows={preview}/>} 
     </Panel>
     <Panel title="Row Data Plan Sidak" desc="Semua objek driver yang direncanakan untuk inspeksi. Status In Review/Done tidak tampil lagi di menu Mulai Inspeksi." action={<button onClick={()=>downloadXlsx('plan-sidak-fatigue.xlsx', rows)}><Download size={16}/> Export Excel</button>}>
