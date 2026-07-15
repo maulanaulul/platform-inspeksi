@@ -311,3 +311,22 @@ select[multiple] option{padding:8px 10px;border-radius:10px;margin:2px 0}
 .outstanding-period-table thead th{position:sticky;top:0;z-index:2;background:#f8fbff}
 .outstanding-period-table td:first-child b{font-size:14px;color:#061027}.no-search-result{padding:18px;margin:0}
 @media(max-width:900px){.multi-site-options{grid-template-columns:1fr}.outstanding-list-toolbar{align-items:stretch}.outstanding-count-pill{justify-content:center}.outstanding-live-search{max-width:none}}
+
+/* V67 - Inspection plan target display polish */
+.inspection-plan-card h3{
+  margin-bottom:8px;
+  word-break:break-word;
+}
+.target-code-chip{
+  display:inline-flex;
+  width:max-content;
+  align-items:center;
+  border:1px solid #dbeafe;
+  background:#eff6ff;
+  color:#1d4ed8;
+  border-radius:999px;
+  padding:5px 9px;
+  font-size:11px;
+  font-weight:900;
+  margin:0 0 10px;
+}

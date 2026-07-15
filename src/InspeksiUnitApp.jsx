@@ -111,11 +111,22 @@ function canApprove(role){ return APPROVAL_ROLES.includes(role) }
 function isHeadOfficeAdmin(context){ return canAdmin(context?.role) && (!context?.site_id || context?.sites?.site_code === 'JIEP') }
 function scopeQuery(query, context){ return isHeadOfficeAdmin(context) ? query : query.eq('site_id', context.site_id) }
 function siteName(context){ return context?.sites?.site_name || (isHeadOfficeAdmin(context) ? 'All Site' : '-') }
-function targetLabel(plan){
-  if (!plan) return '-'
-  if (plan.target_type === 'unit') return `${plan.inspection_units?.unit_code || ''} ${plan.inspection_units?.unit_name || ''}`.trim()
-  return `${plan.inspection_parkings?.parking_code || ''} ${plan.inspection_parkings?.parking_name || ''}`.trim()
+function targetParts(plan){
+  if (!plan) return { title:'-', code:'', type:'' }
+  const isUnit = plan.target_type === 'unit' || plan.unit_id
+  const master = isUnit ? plan.inspection_units : plan.inspection_parkings
+  const name = clean(isUnit ? master?.unit_name : master?.parking_name)
+  const code = clean(isUnit ? master?.unit_code : master?.parking_code)
+  const title = name || code || '-'
+  const shouldShowCode = code && normalizeTargetKey(code) !== normalizeTargetKey(title)
+  return { title, code: shouldShowCode ? code : '', type: isUnit ? 'Unit' : 'Parkiran' }
 }
+function targetLabel(plan){
+  const t = targetParts(plan)
+  return t.code ? `${t.title} (${t.code})` : t.title
+}
+function targetTitle(plan){ return targetParts(plan).title }
+function targetCodeLabel(plan){ return targetParts(plan).code }
 function monthLabel(v){ return MONTHS.find(m => String(m[0]) === String(v))?.[1] || v }
 function planYear(p){ return p?.created_at ? new Date(p.created_at).getFullYear() : p?.tahun }
 function normalizeRow(row){
@@ -528,29 +539,34 @@ function Dashboard({ context }){
   async function load(){
     setLoading(true); setError('')
     try{
-      let planQ = supabase.from('inspection_plans').select('*, sites(site_code,site_name), inspection_units(unit_code,unit_name), inspection_parkings(parking_code,parking_name)').order('created_at', { ascending:false })
-      let recordQ = supabase.from('inspection_records').select('*, sites(site_code,site_name), inspection_plans(*, inspection_units(unit_code,unit_name), inspection_parkings(parking_code,parking_name))').order('created_at', { ascending:false })
-      let findingQ = supabase.from('inspection_findings').select('*, sites(site_code,site_name), inspection_parameters(parameter_code,parameter_name)').order('created_at', { ascending:false })
-      planQ = scopeQuery(planQ, context)
-      recordQ = scopeQuery(recordQ, context)
-      findingQ = scopeQuery(findingQ, context)
-      if (dateFrom) { planQ = planQ.gte('created_at', dateFrom); recordQ = recordQ.gte('inspected_at', dateFrom); findingQ = findingQ.gte('created_at', dateFrom) }
-      if (dateTo) { const end = dateTo + 'T23:59:59'; planQ = planQ.lte('created_at', end); recordQ = recordQ.lte('inspected_at', end); findingQ = findingQ.lte('created_at', end) }
-      const [planRes, recordRes, findingRes, siteRes, unitRes] = await Promise.all([
-        planQ, recordQ, findingQ,
-        supabase.from('sites').select('*').neq('site_code', 'JIEP').eq('status','Aktif').order('site_code'),
-        scopeQuery(supabase.from('inspection_units').select('id,site_id,unit_code,unit_name,status').eq('status','Aktif'), context)
+      const [allPlans, allRecords, allFindings, allSites, allUnits] = await Promise.all([
+        fetchAllRows('inspection_plans', '*, sites(site_code,site_name), inspection_units(unit_code,unit_name), inspection_parkings(parking_code,parking_name)', q => {
+          q = scopeQuery(q.order('created_at', { ascending:false }), context)
+          if (dateFrom) q = q.gte('created_at', dateFrom)
+          if (dateTo) q = q.lte('created_at', dateTo + 'T23:59:59')
+          return q
+        }),
+        fetchAllRows('inspection_records', '*, sites(site_code,site_name), inspection_plans(*, inspection_units(unit_code,unit_name), inspection_parkings(parking_code,parking_name))', q => {
+          q = scopeQuery(q.order('created_at', { ascending:false }), context)
+          if (dateFrom) q = q.gte('inspected_at', dateFrom)
+          if (dateTo) q = q.lte('inspected_at', dateTo + 'T23:59:59')
+          return q
+        }),
+        fetchAllRows('inspection_findings', '*, sites(site_code,site_name), inspection_parameters(parameter_code,parameter_name)', q => {
+          q = scopeQuery(q.order('created_at', { ascending:false }), context)
+          if (dateFrom) q = q.gte('created_at', dateFrom)
+          if (dateTo) q = q.lte('created_at', dateTo + 'T23:59:59')
+          return q
+        }),
+        fetchAllRows('sites', '*', q => q.neq('site_code', 'JIEP').order('site_code')),
+        fetchAllRows('inspection_units', 'id,site_id,unit_code,unit_name,status', q => scopeQuery(q.order('unit_code'), context))
       ])
-      if (planRes.error) throw planRes.error
-      if (recordRes.error) throw recordRes.error
-      if (findingRes.error) throw findingRes.error
-      if (siteRes.error) throw siteRes.error
-      if (unitRes.error) throw unitRes.error
-      setPlans(planRes.data || [])
-      setRecords(recordRes.data || [])
-      setFindings(findingRes.data || [])
-      setSites(isHeadOfficeAdmin(context) ? (siteRes.data || []) : (siteRes.data || []).filter(x => x.id === context.site_id))
-      setUnits(unitRes.data || [])
+      const activeSites = (allSites || []).filter(x => isActiveMasterStatus(x.status))
+      setPlans(allPlans || [])
+      setRecords(allRecords || [])
+      setFindings(allFindings || [])
+      setSites(isHeadOfficeAdmin(context) ? activeSites : activeSites.filter(x => x.id === context.site_id))
+      setUnits((allUnits || []).filter(x => isActiveMasterStatus(x.status)))
     }catch(e){
       console.error('[DASHBOARD LOAD ERROR]', e)
       setError(e.message || String(e))
@@ -876,11 +892,11 @@ function AccessMapping(){
 
   useEffect(() => { load() }, [])
   async function load(){
-    const [{ data:a }, { data:s }, { data:p }, { data:ua }] = await Promise.all([
-      supabase.from('applications').select('*').order('app_name'),
-      supabase.from('sites').select('*').order('site_code'),
-      supabase.from('users_profile').select('*').order('created_at', { ascending:false }),
-      supabase.from('user_app_access').select('*, users_profile(nama,email,nrp), applications(app_code,app_name), sites(site_code,site_name)').order('created_at', { ascending:false })
+    const [a, s, p, ua] = await Promise.all([
+      fetchAllRows('applications', '*', q => q.order('app_name')),
+      fetchAllRows('sites', '*', q => q.order('site_code')),
+      fetchAllRows('users_profile', '*', q => q.order('created_at', { ascending:false })),
+      fetchAllRows('user_app_access', '*, users_profile(nama,email,nrp), applications(app_code,app_name), sites(site_code,site_name)', q => q.order('created_at', { ascending:false }))
     ])
     setApps(a || [])
     setSites(s || [])
@@ -950,7 +966,7 @@ function SiteMaster(){
   const [message, setMessage] = useState('')
   const [form, setForm] = useState({ site_code:'', site_name:'', region:'Operation', status:'Aktif' })
   useEffect(() => { load() }, [])
-  async function load(){ const { data } = await supabase.from('sites').select('*').order('site_code'); setSites(data || []) }
+  async function load(){ const data = await fetchAllRows('sites', '*', q => q.order('site_code')); setSites(data || []) }
   function edit(s){ setEditing(s.id); setForm({ site_code:s.site_code, site_name:s.site_name, region:s.region || '', status:s.status || 'Aktif' }) }
   function reset(){ setEditing(null); setForm({ site_code:'', site_name:'', region:'Operation', status:'Aktif' }) }
   async function save(e){
@@ -1029,7 +1045,7 @@ function MasterUnits({ profile, context }){
   async function previewFile(file){
     if (!file) return
     const raw = await parseExcel(file)
-    const { data:allSites } = await supabase.from('sites').select('id,site_code')
+    const allSites = await fetchAllRows('sites', 'id,site_code', q => q.order('site_code'))
     const mapped = raw.map((r, idx) => {
       const siteCode = adminHO ? clean(r.site_code).toUpperCase() : context.sites?.site_code
       const site = (allSites || []).find(s => s.site_code === siteCode)
@@ -1122,7 +1138,7 @@ function MasterParkings({ profile, context }){
   async function previewFile(file){
     if (!file) return
     const raw = await parseExcel(file)
-    const { data:allSites } = await supabase.from('sites').select('id,site_code')
+    const allSites = await fetchAllRows('sites', 'id,site_code', q => q.order('site_code'))
     const mapped = raw.map((r, idx) => {
       const siteCode = adminHO ? clean(r.site_code).toUpperCase() : context.sites?.site_code
       const site = (allSites || []).find(s => s.site_code === siteCode)
@@ -1177,7 +1193,7 @@ function ParameterChecklist(){
   const [preview, setPreview] = useState([])
   const [form, setForm] = useState({ category:CATEGORIES[0], parameter_code:AUTO_CODE_LABEL, parameter_name:'', description:'', severity:'Medium', status:'Aktif' })
   useEffect(() => { load() }, [])
-  async function load(){ const { data } = await supabase.from('inspection_parameters').select('*').order('category').order('parameter_code'); setRows(data || []) }
+  async function load(){ const data = await fetchAllRows('inspection_parameters', '*', q => q.order('category').order('parameter_code')); setRows(data || []) }
   function reset(){ setEditing(null); setForm({ category:CATEGORIES[0], parameter_code:AUTO_CODE_LABEL, parameter_name:'', description:'', severity:'Medium', status:'Aktif' }) }
   function edit(r){ setEditing(r.id); setForm({ category:r.category, parameter_code:r.parameter_code || '', parameter_name:r.parameter_name, description:r.description || '', severity:r.severity || 'Medium', status:r.status || 'Aktif' }); window.scrollTo({ top:0, behavior:'smooth' }) }
   async function save(e){
@@ -1372,40 +1388,30 @@ function InspectionExecution({ profile, context }){
   useEffect(() => { load() }, [context.id])
   async function load(){
     setMessage('')
-    let q = supabase.from('inspection_plans').select('*').in('status', ['Planned','Rejected']).order('created_at', { ascending:false })
-    q = scopeQuery(q, context)
-
-    const [planRes, paramRes, siteRes, unitRes, parkingRes] = await Promise.all([
-      q,
-      supabase.from('inspection_parameters').select('*').eq('status','Aktif').order('parameter_code'),
-      supabase.from('sites').select('id,site_code,site_name'),
-      supabase.from('inspection_units').select('id,site_id,unit_code,unit_name'),
-      supabase.from('inspection_parkings').select('id,site_id,parking_code,parking_name')
-    ])
-
-    if (planRes.error){
-      console.error('[INSPECTION PLAN LOAD ERROR]', planRes.error)
-      setMessage(planRes.error.message || 'Gagal mengambil data plan inspeksi.')
-      setPlans([])
-      return
+    try{
+      const [planRows, paramRows, siteRows, unitRows, parkingRows] = await Promise.all([
+        fetchAllRows('inspection_plans', '*', q => scopeQuery(q.in('status', ['Planned','Rejected']).order('created_at', { ascending:false }), context)),
+        fetchAllRows('inspection_parameters', '*', q => q.order('parameter_code')),
+        fetchAllRows('sites', 'id,site_code,site_name,status', q => q.order('site_code')),
+        fetchAllRows('inspection_units', 'id,site_id,unit_code,unit_name,status', q => q.order('unit_code')),
+        fetchAllRows('inspection_parkings', 'id,site_id,parking_code,parking_name,status', q => q.order('parking_code'))
+      ])
+      const siteMap = new Map((siteRows || []).map(x => [x.id, x]))
+      const unitMap = new Map((unitRows || []).map(x => [x.id, x]))
+      const parkingMap = new Map((parkingRows || []).map(x => [x.id, x]))
+      const enriched = (planRows || []).map(p => ({
+        ...p,
+        sites: siteMap.get(p.site_id) || null,
+        inspection_units: unitMap.get(p.unit_id) || null,
+        inspection_parkings: parkingMap.get(p.parking_id) || null
+      }))
+      setPlans(enriched)
+      setParams((paramRows || []).filter(x => isActiveMasterStatus(x.status)))
+    }catch(err){
+      console.error('[INSPECTION LOAD ERROR]', err)
+      setMessage(err.message || 'Gagal mengambil data inspeksi.')
+      setPlans([]); setParams([])
     }
-    if (paramRes.error){
-      console.error('[INSPECTION PARAM LOAD ERROR]', paramRes.error)
-      setMessage(paramRes.error.message || 'Gagal mengambil parameter checklist.')
-    }
-
-    const siteMap = new Map((siteRes.data || []).map(x => [x.id, x]))
-    const unitMap = new Map((unitRes.data || []).map(x => [x.id, x]))
-    const parkingMap = new Map((parkingRes.data || []).map(x => [x.id, x]))
-    const enriched = (planRes.data || []).map(p => ({
-      ...p,
-      sites: siteMap.get(p.site_id) || null,
-      inspection_units: unitMap.get(p.unit_id) || null,
-      inspection_parkings: parkingMap.get(p.parking_id) || null
-    }))
-
-    setPlans(enriched)
-    setParams(paramRes.data || [])
   }
   function openPlan(plan){
     const relevant = params.filter(p => p.category === plan.category)
@@ -1441,13 +1447,17 @@ function InspectionExecution({ profile, context }){
     <Panel title="List Inspeksi" desc="List dibuat dalam bentuk card agar mudah discroll. Klik Mulai Inspeksi untuk membuka box fokus inspeksi." action={<div className="searchbox"><Search size={16}/><input placeholder="Search site/nama/kode target" value={search} onChange={e=>setSearch(e.target.value)}/></div>}>
       {message && <p className="message">{message}</p>}
       <div className="card-grid">
-        {filtered.map(p => <div className="work-card" key={p.id}>
-          <div className="card-top"><StatusPill value={p.status}/><span>{p.sites?.site_code}</span></div>
-          <h3>{targetLabel(p)}</h3>
-          <p>{p.category}</p>
-          <small>{monthLabel(p.bulan)} {p.tahun} · Due {p.due_date || '-'}</small>
-          <button onClick={()=>openPlan(p)}>Mulai Inspeksi</button>
-        </div>)}
+        {filtered.map(p => {
+          const targetCode = targetCodeLabel(p)
+          return <div className="work-card inspection-plan-card" key={p.id}>
+            <div className="card-top"><StatusPill value={p.status}/><span>{p.sites?.site_code}</span></div>
+            <h3>{targetTitle(p)}</h3>
+            {targetCode && <small className="target-code-chip">Kode: {targetCode}</small>}
+            <p>{p.category}</p>
+            <small>{monthLabel(p.bulan)} {p.tahun} · Due {p.due_date || '-'}</small>
+            <button onClick={()=>openPlan(p)}>Mulai Inspeksi</button>
+          </div>
+        })}
       </div>
       {!filtered.length && <p className="muted">Tidak ada plan yang perlu diinspeksi. Plan submitted/approved tidak ditampilkan.</p>}
     </Panel>
@@ -1480,9 +1490,7 @@ function Outstanding({ profile, context }){
   const [busy, setBusy] = useState(false)
   useEffect(() => { load() }, [context.id])
   async function load(){
-    let q = supabase.from('inspection_findings').select('*, sites(site_code,site_name), inspection_parameters(parameter_code,parameter_name,severity)').order('created_at', { ascending:false })
-    q = scopeQuery(q, context)
-    const { data } = await q
+    const data = await fetchAllRows('inspection_findings', '*, sites(site_code,site_name), inspection_parameters(parameter_code,parameter_name,severity)', q => scopeQuery(q.order('created_at', { ascending:false }), context))
     setRows(data || [])
   }
   async function requestClose(){
@@ -1524,10 +1532,10 @@ function Approval({ profile, context }){
   const [message, setMessage] = useState('')
   useEffect(() => { load() }, [context.id])
   async function load(){
-    let recQ = supabase.from('inspection_records').select('*, sites(site_code,site_name), inspection_plans(*, inspection_units(unit_code,unit_name), inspection_parkings(parking_code,parking_name)), inspection_answers(*, inspection_parameters(parameter_code,parameter_name,severity,description))').eq('status','Submitted').order('created_at', { ascending:false })
-    let closeQ = supabase.from('inspection_findings').select('*, sites(site_code,site_name), inspection_parameters(parameter_code,parameter_name,severity)').eq('status','Close Requested').order('close_requested_at', { ascending:false })
-    recQ = scopeQuery(recQ, context); closeQ = scopeQuery(closeQ, context)
-    const [{ data:r }, { data:c }] = await Promise.all([recQ, closeQ])
+    const [r, c] = await Promise.all([
+      fetchAllRows('inspection_records', '*, sites(site_code,site_name), inspection_plans(*, inspection_units(unit_code,unit_name), inspection_parkings(parking_code,parking_name)), inspection_answers(*, inspection_parameters(parameter_code,parameter_name,severity,description))', q => scopeQuery(q.eq('status','Submitted').order('created_at', { ascending:false }), context)),
+      fetchAllRows('inspection_findings', '*, sites(site_code,site_name), inspection_parameters(parameter_code,parameter_name,severity)', q => scopeQuery(q.eq('status','Close Requested').order('close_requested_at', { ascending:false }), context))
+    ])
     setRecords(r || []); setClosings(c || [])
   }
   async function approveInspection(){
