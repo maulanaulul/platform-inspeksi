@@ -98,6 +98,7 @@ function normEmail(v){ return cleanText(v).toLowerCase() }
 function normCode(v){ return cleanText(v).toUpperCase() }
 function normNrp(v){ return cleanText(v).replace(/\s+/g, '').toUpperCase() }
 function sameNrp(a,b){ return normNrp(a) === normNrp(b) }
+function isActiveStatus(v){ const key = normCode(v); return !key || key === 'AKTIF' || key === 'ACTIVE' }
 
 async function fetchAllRows(table, select='*', buildQuery=null, pageSize=1000){
   const all = []
@@ -546,55 +547,47 @@ function SidakDashboard({ context }) {
     setLoading(true)
     const selectedSiteId = globalView && siteFilter !== 'ALL' ? siteFilter : (!globalView ? context.site_id : null)
 
-    let planQ = supabase
-      .from('fatigue_plans')
-      .select('id, site_id, bulan, tahun, status, created_at, drivers(nama_driver,nrp_driver), sites(site_name,site_code)')
-      .order('created_at', { ascending: false })
-    let inspQ = supabase
-      .from('fatigue_inspections')
-      .select('id, site_id, tanggal_inspeksi, status, drivers(nama_driver,nrp_driver), sites(site_name,site_code)')
-      .order('created_at', { ascending: false })
-    let outQ = supabase
-      .from('fatigue_outstandings')
-      .select('id, site_id, description, status, created_at, drivers(nama_driver,nrp_driver), sites(site_name,site_code), fatigue_parameters(parameter_name)')
-      .order('created_at', { ascending: false })
+    try{
+      const [p, i, o, s] = await Promise.all([
+        fetchAllRows('fatigue_plans', 'id, site_id, bulan, tahun, status, created_at, drivers(nama_driver,nrp_driver), sites(site_name,site_code)', q => {
+          q = q.order('created_at', { ascending:false })
+          if (selectedSiteId) q = q.eq('site_id', selectedSiteId)
+          if (dateFrom) q = q.gte('created_at', dateFrom)
+          if (dateTo) q = q.lte('created_at', dateTo + 'T23:59:59')
+          return q
+        }),
+        fetchAllRows('fatigue_inspections', 'id, plan_id, site_id, tanggal_inspeksi, status, drivers(nama_driver,nrp_driver), sites(site_name,site_code)', q => {
+          q = q.order('created_at', { ascending:false })
+          if (selectedSiteId) q = q.eq('site_id', selectedSiteId)
+          if (dateFrom) q = q.gte('tanggal_inspeksi', dateFrom)
+          if (dateTo) q = q.lte('tanggal_inspeksi', dateTo)
+          return q
+        }),
+        fetchAllRows('fatigue_outstandings', 'id, site_id, description, status, created_at, drivers(nama_driver,nrp_driver), sites(site_name,site_code), fatigue_parameters(parameter_name)', q => {
+          q = q.order('created_at', { ascending:false })
+          if (selectedSiteId) q = q.eq('site_id', selectedSiteId)
+          if (dateFrom) q = q.gte('created_at', dateFrom)
+          if (dateTo) q = q.lte('created_at', dateTo + 'T23:59:59')
+          return q
+        }),
+        fetchAllRows('sites', 'id, site_name, site_code, status', q => {
+          q = q.neq('site_code', 'JIEP').order('site_code', { ascending:true })
+          if (selectedSiteId) q = q.eq('id', selectedSiteId)
+          return q
+        })
+      ])
 
-    if (selectedSiteId) {
-      planQ = planQ.eq('site_id', selectedSiteId)
-      inspQ = inspQ.eq('site_id', selectedSiteId)
-      outQ = outQ.eq('site_id', selectedSiteId)
+      const notJiep = x => (x.sites?.site_code || '').toUpperCase() !== 'JIEP'
+      setPlans((p || []).filter(notJiep))
+      setInspections((i || []).filter(notJiep))
+      setOuts((o || []).filter(notJiep))
+      setSites((s || []).filter(x => (x.site_code || '').toUpperCase() !== 'JIEP' && isActiveStatus(x.status)).sort((a,b)=>String(a.site_code || '').localeCompare(String(b.site_code || ''))))
+    }catch(e){
+      console.error('[SIDAK DASHBOARD LOAD ERROR]', e)
+      setPlans([]); setInspections([]); setOuts([]); setSites([])
+    }finally{
+      setLoading(false)
     }
-    if (dateFrom) {
-      planQ = planQ.gte('created_at', dateFrom)
-      inspQ = inspQ.gte('tanggal_inspeksi', dateFrom)
-      outQ = outQ.gte('created_at', dateFrom)
-    }
-    if (dateTo) {
-      const end = dateTo + 'T23:59:59'
-      planQ = planQ.lte('created_at', end)
-      inspQ = inspQ.lte('tanggal_inspeksi', dateTo)
-      outQ = outQ.lte('created_at', end)
-    }
-
-    let siteQ = supabase
-      .from('sites')
-      .select('id, site_name, site_code, status')
-      .neq('site_code', 'JIEP')
-      .order('site_code', { ascending: true })
-
-    // Site selector harus benar-benar mengubah isi dashboard.
-    // Kalau user memilih 1 site, daftar Achievement Site hanya menampilkan site itu.
-    // Kalau Semua Site, seluruh site operasional tetap tampil 0% bila belum punya plan.
-    if (selectedSiteId) siteQ = siteQ.eq('id', selectedSiteId)
-
-    const [{ data: p }, { data: i }, { data: o }, { data: s }] = await Promise.all([planQ, inspQ, outQ, siteQ])
-
-    const notJiep = x => (x.sites?.site_code || '').toUpperCase() !== 'JIEP'
-    setPlans((p || []).filter(notJiep))
-    setInspections((i || []).filter(notJiep))
-    setOuts((o || []).filter(notJiep))
-    setSites((s || []).filter(x => (x.site_code || '').toUpperCase() !== 'JIEP').sort((a,b)=>String(a.site_code || '').localeCompare(String(b.site_code || ''))))
-    setLoading(false)
   }
 
   const rows = plans.map(r => ({
@@ -607,13 +600,37 @@ function SidakDashboard({ context }) {
     nrp: r.drivers?.nrp_driver || '-',
     status: r.status
   }))
-  const actual = inspections.filter(x => x.status === 'Approved').length
-  const submitted = inspections.filter(x => x.status === 'Submitted').length
-  const rejected = inspections.filter(x => x.status === 'Rejected').length
+  // V68 FIX - Achievement dihitung berdasarkan unique plan_id yang Approved.
+  // Ini mencegah achievement lebih dari 100% ketika 1 plan punya lebih dari 1 row inspection.
+  const planById = new Map((plans || []).map(plan => [plan.id, plan]))
+  const visiblePlanIds = new Set((plans || []).map(plan => plan.id))
+
+  function uniqueInspectionPlanIdsByStatus(status){
+    return new Set(
+      (inspections || [])
+        .filter(item =>
+          item.status === status &&
+          item.plan_id &&
+          visiblePlanIds.has(item.plan_id)
+        )
+        .map(item => item.plan_id)
+    )
+  }
+
+  const approvedPlanIds = uniqueInspectionPlanIdsByStatus('Approved')
+  const submittedPlanIds = uniqueInspectionPlanIdsByStatus('Submitted')
+  const rejectedPlanIds = uniqueInspectionPlanIdsByStatus('Rejected')
+
+  const actual = approvedPlanIds.size
+  const submitted = submittedPlanIds.size
+  const rejected = rejectedPlanIds.size
+
   const open = outs.filter(x => x.status === 'Open').length
   const closePending = outs.filter(x => x.status === 'Closed').length
   const closed = outs.filter(x => x.status === 'Approved').length
-  const achievement = plans.length ? Math.round((actual / plans.length) * 100) : 0
+
+  const achievementRaw = plans.length ? Math.round((actual / plans.length) * 100) : 0
+  const achievement = Math.max(0, Math.min(achievementRaw, 100))
   const safePercent = v => Math.max(0, Math.min(Number.isFinite(v) ? v : 0, 100))
 
   const siteMap = new Map()
@@ -654,22 +671,48 @@ function SidakDashboard({ context }) {
     return siteMap.get(code)
   }
 
-  plans.forEach(p => {
-    const bucket = getSiteBucket(p)
+  plans.forEach(plan => {
+    const bucket = getSiteBucket(plan)
     if (bucket) bucket.plan++
   })
-  inspections.forEach(i => {
-    const bucket = getSiteBucket(i)
+
+  // V68 FIX - Achievement site juga dihitung dari unique plan_id.
+  // Row inspection yang duplicate untuk plan yang sama tidak dihitung berkali-kali.
+  const siteApprovedPlanIds = new Set()
+  const siteSubmittedPlanIds = new Set()
+
+  inspections.forEach(insp => {
+    if (!insp.plan_id || !visiblePlanIds.has(insp.plan_id)) return
+
+    const sourcePlan = planById.get(insp.plan_id)
+    if (!sourcePlan) return
+
+    const bucket = getSiteBucket(sourcePlan)
     if (!bucket) return
-    if (i.status === 'Approved') bucket.actual++
-    if (i.status === 'Submitted') bucket.submitted++
+
+    if (insp.status === 'Approved' && !siteApprovedPlanIds.has(insp.plan_id)) {
+      bucket.actual++
+      siteApprovedPlanIds.add(insp.plan_id)
+    }
+
+    if (insp.status === 'Submitted' && !siteSubmittedPlanIds.has(insp.plan_id)) {
+      bucket.submitted++
+      siteSubmittedPlanIds.add(insp.plan_id)
+    }
   })
+
   outs.filter(o => o.status === 'Open').forEach(o => {
     const bucket = getSiteBucket(o)
     if (bucket) bucket.open++
   })
+
   const siteRows = Array.from(siteMap.values())
-    .map(x => ({ ...x, achievement: x.plan ? Math.round((x.actual/x.plan)*100) : 0 }))
+    .map(x => ({
+      ...x,
+      achievement: x.plan
+        ? Math.max(0, Math.min(Math.round((x.actual / x.plan) * 100), 100))
+        : 0
+    }))
     .sort((a,b)=>String(a.site_code || a.site).localeCompare(String(b.site_code || b.site), 'id', { sensitivity:'base' }))
 
   const temuanRows = outs.map(o => ({
@@ -824,17 +867,21 @@ function DriverMaster({ context }) {
   useEffect(() => { load() }, [context.id])
 
   async function load() {
-    let driverQ = supabase.from('drivers').select('*, vendors(vendor_code,vendor_name), sites(site_name,site_code)').order('created_at', { ascending: false })
-    if (!adminHO) driverQ = driverQ.eq('site_id', context.site_id)
-    const [{ data: d }, { data: v }, { data: s }] = await Promise.all([
-      driverQ,
-      supabase.from('vendors').select('*').order('vendor_name'),
-      supabase.from('sites').select('*').neq('site_code','JIEP').order('site_code')
-    ])
-    setDrivers(d || [])
-    setVendors(v || [])
-    setSites(s || [])
-    setForm(f => ({ ...f, site_id: f.site_id || context.site_id || (s || [])[0]?.id || '' }))
+    try{
+      const [d, v, s] = await Promise.all([
+        fetchAllRows('drivers', '*, vendors(vendor_code,vendor_name), sites(site_name,site_code)', q => {
+          q = q.order('created_at', { ascending:false })
+          if (!adminHO) q = q.eq('site_id', context.site_id)
+          return q
+        }),
+        fetchAllRows('vendors', '*', q => q.order('vendor_name')),
+        fetchAllRows('sites', '*', q => q.neq('site_code','JIEP').order('site_code'))
+      ])
+      setDrivers(d || [])
+      setVendors(v || [])
+      setSites((s || []).filter(x => isActiveStatus(x.status)))
+      setForm(f => ({ ...f, site_id: f.site_id || context.site_id || (s || [])[0]?.id || '' }))
+    }catch(e){ setMessage(e.message || 'Gagal memuat master driver.') }
   }
 
   function resetForm(){
@@ -923,7 +970,7 @@ function DriverMaster({ context }) {
     try{
       const rows = (await parseExcelOrCsv(file)).map(normalizeRow)
       const seenNrp=new Set(), seenEmail=new Set()
-      const [{data:allSites},{data:allVendors}] = await Promise.all([supabase.from('sites').select('id,site_code'), supabase.from('vendors').select('id,vendor_name')])
+      const [allSites, allVendors] = await Promise.all([fetchAllRows('sites','id,site_code', q => q.order('site_code')), fetchAllRows('vendors','id,vendor_name', q => q.order('vendor_name'))])
       const mapped = rows.map((r,idx)=>{
         const siteCode = adminHO ? normCode(r.site_code) : context.sites?.site_code
         const vendorName = cleanText(r.vendor_name || r.vendor)
@@ -1077,17 +1124,24 @@ function FatiguePlans({ context, profile }) {
 
   useEffect(() => { load() }, [context.id])
   async function load() {
-    let driverQ = supabase.from('drivers').select('*, sites(site_code,site_name)').eq('status', 'Aktif').order('nama_driver')
-    let planQ = supabase.from('fatigue_plans').select('*, drivers(nama_driver,nrp_driver), sites(site_name,site_code)').order('created_at', { ascending:false })
-    if (!adminHO) { driverQ = driverQ.eq('site_id', context.site_id); planQ = planQ.eq('site_id', context.site_id) }
-    const [{ data: d }, { data: p }, { data: s }] = await Promise.all([
-      driverQ,
-      planQ,
-      supabase.from('sites').select('*').neq('site_code','JIEP').order('site_code')
-    ])
-    setDrivers(d || [])
-    setPlans(p || [])
-    setSites(s || [])
+    try{
+      const [d, p, s] = await Promise.all([
+        fetchAllRows('drivers', '*, sites(site_code,site_name)', q => {
+          q = q.order('nama_driver')
+          if (!adminHO) q = q.eq('site_id', context.site_id)
+          return q
+        }),
+        fetchAllRows('fatigue_plans', '*, drivers(nama_driver,nrp_driver), sites(site_name,site_code)', q => {
+          q = q.order('created_at', { ascending:false })
+          if (!adminHO) q = q.eq('site_id', context.site_id)
+          return q
+        }),
+        fetchAllRows('sites', '*', q => q.neq('site_code','JIEP').order('site_code'))
+      ])
+      setDrivers((d || []).filter(x => isActiveStatus(x.status)))
+      setPlans(p || [])
+      setSites((s || []).filter(x => isActiveStatus(x.status)))
+    }catch(e){ setMessage(e.message || 'Gagal memuat plan sidak.') }
   }
   const visibleDrivers = adminHO ? drivers.filter(d => !form.site_id || d.site_id === form.site_id) : drivers
   async function save(e) {
@@ -1140,7 +1194,7 @@ function FatiguePlans({ context, profile }) {
           error=`nrp_driver ditemukan, tetapi terdaftar di site ${actualSite?.site_code || 'lain'}, bukan ${siteCode}`
         }
         else if(!driver) error='nrp_driver tidak ditemukan di Master Driver site tersebut'
-        else if(driver.status && driver.status !== 'Aktif') error='driver ditemukan, tetapi status Master Driver tidak Aktif'
+        else if(!isActiveStatus(driver.status)) error='driver ditemukan, tetapi status Master Driver tidak Aktif'
         else if(!bulan || bulan<1 || bulan>12) error='bulan wajib 1-12'
         else if(!tahun) error='tahun wajib'
         return { row:idx+2, site_code:siteCode, nrp_driver:nrp, nama_driver:driver?.nama_driver || '', bulan, tahun, status:cleanText(r.status)||'Planned', site_id:site?.id, driver_id:driver?.id, error }
@@ -1299,9 +1353,11 @@ function FatigueOutstanding({ context, profile }) {
 
   useEffect(() => { load() }, [context.id])
   async function load() {
-    let q = supabase.from('fatigue_outstandings').select('*, drivers(nama_driver,nrp_driver), fatigue_parameters(parameter_name), sites(site_name,site_code)').order('created_at', { ascending:false })
-    if (!isHeadOfficeAdmin(context)) q = q.eq('site_id', context.site_id)
-    const { data } = await q
+    const data = await fetchAllRows('fatigue_outstandings', '*, drivers(nama_driver,nrp_driver), fatigue_parameters(parameter_name), sites(site_name,site_code)', q => {
+      q = q.order('created_at', { ascending:false })
+      if (!isHeadOfficeAdmin(context)) q = q.eq('site_id', context.site_id)
+      return q
+    })
     setRows(data || [])
   }
   async function closeOutstanding() {
@@ -1351,9 +1407,17 @@ function FatigueApproval({ context, profile }) {
   useEffect(() => { load() }, [context.id])
   async function load() {
     if (!hasAccess) return
-    const [{ data: i }, { data: o }] = await Promise.all([
-      (isHeadOfficeAdmin(context) ? supabase.from('fatigue_inspections').select('*, drivers(nama_driver,nrp_driver), sites(site_name,site_code)').eq('status','Submitted') : supabase.from('fatigue_inspections').select('*, drivers(nama_driver,nrp_driver), sites(site_name,site_code)').eq('site_id', context.site_id).eq('status','Submitted')),
-      (isHeadOfficeAdmin(context) ? supabase.from('fatigue_outstandings').select('*, drivers(nama_driver,nrp_driver), fatigue_parameters(parameter_name), sites(site_name,site_code)').eq('status','Closed') : supabase.from('fatigue_outstandings').select('*, drivers(nama_driver,nrp_driver), fatigue_parameters(parameter_name), sites(site_name,site_code)').eq('site_id', context.site_id).eq('status','Closed'))
+    const [i, o] = await Promise.all([
+      fetchAllRows('fatigue_inspections', '*, drivers(nama_driver,nrp_driver), sites(site_name,site_code)', q => {
+        q = q.eq('status','Submitted')
+        if (!isHeadOfficeAdmin(context)) q = q.eq('site_id', context.site_id)
+        return q
+      }),
+      fetchAllRows('fatigue_outstandings', '*, drivers(nama_driver,nrp_driver), fatigue_parameters(parameter_name), sites(site_name,site_code)', q => {
+        q = q.eq('status','Closed')
+        if (!isHeadOfficeAdmin(context)) q = q.eq('site_id', context.site_id)
+        return q
+      })
     ])
     setInspections(i || [])
     setOuts(o || [])
