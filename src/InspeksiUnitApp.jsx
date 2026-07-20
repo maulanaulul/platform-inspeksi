@@ -522,9 +522,12 @@ function DashboardDateFilter({ dateFrom, dateTo, setDateFrom, setDateTo, siteFil
 }
 
 function Dashboard({ context }){
-  const todayStr = new Date().toISOString().slice(0, 10)
-  const [dateFrom, setDateFrom] = useState(todayStr)
-  const [dateTo, setDateTo] = useState(todayStr)
+  const now = new Date()
+  const monthStartStr = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10)
+  const monthEndStr = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10)
+
+  const [dateFrom, setDateFrom] = useState(monthStartStr)
+  const [dateTo, setDateTo] = useState(monthEndStr)
   const [loading, setLoading] = useState(true)
   const [plans, setPlans] = useState([])
   const [records, setRecords] = useState([])
@@ -534,34 +537,41 @@ function Dashboard({ context }){
   const [siteFilter, setSiteFilter] = useState(isHeadOfficeAdmin(context) ? '' : (context.site_id || ''))
   const [error, setError] = useState('')
 
-  useEffect(() => { setSiteFilter(isHeadOfficeAdmin(context) ? '' : (context.site_id || '')) }, [context.id, context.site_id])
-  useEffect(() => { load() }, [context.id, dateFrom, dateTo])
+  useEffect(() => {
+    setSiteFilter(isHeadOfficeAdmin(context) ? '' : (context.site_id || ''))
+  }, [context.id, context.site_id])
+
+  useEffect(() => { load() }, [context.id])
+
   async function load(){
-    setLoading(true); setError('')
+    setLoading(true)
+    setError('')
+
     try{
       const [allPlans, allRecords, allFindings, allSites, allUnits] = await Promise.all([
-        fetchAllRows('inspection_plans', '*, sites(site_code,site_name), inspection_units(unit_code,unit_name), inspection_parkings(parking_code,parking_name)', q => {
-          q = scopeQuery(q.order('created_at', { ascending:false }), context)
-          if (dateFrom) q = q.gte('created_at', dateFrom)
-          if (dateTo) q = q.lte('created_at', dateTo + 'T23:59:59')
-          return q
-        }),
-        fetchAllRows('inspection_records', '*, sites(site_code,site_name), inspection_plans(*, inspection_units(unit_code,unit_name), inspection_parkings(parking_code,parking_name))', q => {
-          q = scopeQuery(q.order('created_at', { ascending:false }), context)
-          if (dateFrom) q = q.gte('inspected_at', dateFrom)
-          if (dateTo) q = q.lte('inspected_at', dateTo + 'T23:59:59')
-          return q
-        }),
-        fetchAllRows('inspection_findings', '*, sites(site_code,site_name), inspection_parameters(parameter_code,parameter_name)', q => {
-          q = scopeQuery(q.order('created_at', { ascending:false }), context)
-          if (dateFrom) q = q.gte('created_at', dateFrom)
-          if (dateTo) q = q.lte('created_at', dateTo + 'T23:59:59')
-          return q
-        }),
+        fetchAllRows(
+          'inspection_plans',
+          '*, sites(site_code,site_name), inspection_units(unit_code,unit_name), inspection_parkings(parking_code,parking_name)',
+          q => scopeQuery(q.order('created_at', { ascending:false }), context)
+        ),
+        fetchAllRows(
+          'inspection_records',
+          '*, sites(site_code,site_name), inspection_plans(*, inspection_units(unit_code,unit_name), inspection_parkings(parking_code,parking_name))',
+          q => scopeQuery(q.order('created_at', { ascending:false }), context)
+        ),
+        fetchAllRows(
+          'inspection_findings',
+          '*, sites(site_code,site_name), inspection_parameters(parameter_code,parameter_name)',
+          q => scopeQuery(q.order('created_at', { ascending:false }), context)
+        ),
         fetchAllRows('sites', '*', q => q.neq('site_code', 'JIEP').order('site_code')),
-        fetchAllRows('inspection_units', 'id,site_id,unit_code,unit_name,status', q => scopeQuery(q.order('unit_code'), context))
+        fetchAllRows('inspection_units', 'id,site_id,unit_code,unit_name,status', q => scopeQuery(q.order('unit_name'), context))
       ])
-      const activeSites = (allSites || []).filter(x => isActiveMasterStatus(x.status))
+
+      const activeSites = (allSites || [])
+        .filter(x => isActiveMasterStatus(x.status))
+        .sort((a,b) => String(a.site_code || a.site_name || '').localeCompare(String(b.site_code || b.site_name || ''), 'id', { numeric:true, sensitivity:'base' }))
+
       setPlans(allPlans || [])
       setRecords(allRecords || [])
       setFindings(allFindings || [])
@@ -570,27 +580,180 @@ function Dashboard({ context }){
     }catch(e){
       console.error('[DASHBOARD LOAD ERROR]', e)
       setError(e.message || String(e))
-      setPlans([]); setRecords([]); setFindings([]); setSites([]); setUnits([])
+      setPlans([])
+      setRecords([])
+      setFindings([])
+      setSites([])
+      setUnits([])
     }finally{
       setLoading(false)
     }
   }
 
-  const calcPercent = (done, target) => target ? Math.round((done / target) * 100) : 0
   const canChooseSite = isHeadOfficeAdmin(context)
   const effectiveSiteId = canChooseSite ? siteFilter : (context.site_id || '')
+
+  function toDateOnly(value){
+    if (!value) return ''
+    if (typeof value === 'string') return value.slice(0, 10)
+    const d = new Date(value)
+    if (Number.isNaN(d.getTime())) return ''
+    return d.toISOString().slice(0, 10)
+  }
+
+  function getPlanMonthStart(plan){
+    const y = Number(plan?.tahun)
+    const m = Number(plan?.bulan)
+    if (!y || !m) return ''
+    return `${y}-${String(m).padStart(2, '0')}-01`
+  }
+
+  function getPlanMonthEnd(plan){
+    const y = Number(plan?.tahun)
+    const m = Number(plan?.bulan)
+    if (!y || !m) return ''
+    return new Date(y, m, 0).toISOString().slice(0, 10)
+  }
+
+  function dateInRange(value){
+    const d = toDateOnly(value)
+    if (!d) return false
+    if (dateFrom && d < dateFrom) return false
+    if (dateTo && d > dateTo) return false
+    return true
+  }
+
+  function monthOverlapRange(plan){
+    const start = getPlanMonthStart(plan)
+    const end = getPlanMonthEnd(plan)
+    if (!start || !end) return false
+    if (dateFrom && end < dateFrom) return false
+    if (dateTo && start > dateTo) return false
+    return true
+  }
+
+  function planMatchesDate(plan){
+    if (!dateFrom && !dateTo) return true
+
+    // Plan bulanan lebih tepat dibaca dari due_date atau bulan/tahun.
+    // created_at hanya fallback untuk data lama yang belum punya due_date/bulan/tahun.
+    if (plan?.due_date && dateInRange(plan.due_date)) return true
+    if (monthOverlapRange(plan)) return true
+    if (!plan?.due_date && !plan?.bulan && !plan?.tahun && dateInRange(plan?.created_at)) return true
+
+    return false
+  }
+
+  function recordMatchesDate(record){
+    if (!dateFrom && !dateTo) return true
+    return dateInRange(record?.inspected_at) || dateInRange(record?.created_at) || dateInRange(record?.approved_at)
+  }
+
+  function findingMatchesDate(finding){
+    if (!dateFrom && !dateTo) return true
+    return (
+      dateInRange(finding?.created_at) ||
+      dateInRange(finding?.updated_at) ||
+      dateInRange(finding?.close_requested_at) ||
+      dateInRange(finding?.close_approved_at)
+    )
+  }
+
+  const siteScopedPlans = effectiveSiteId ? plans.filter(p => p.site_id === effectiveSiteId) : plans
+  const siteScopedRecords = effectiveSiteId ? records.filter(r => r.site_id === effectiveSiteId) : records
+  const siteScopedFindings = effectiveSiteId ? findings.filter(f => f.site_id === effectiveSiteId) : findings
+
+  const recordsInRange = siteScopedRecords.filter(recordMatchesDate)
+  const findingsInRange = siteScopedFindings.filter(findingMatchesDate)
+
+  // V69 FIX:
+  // Dashboard plan tidak hanya dari created_at plan.
+  // Plan akan ikut tampil kalau due_date/bulan-tahun masuk range, atau kalau record/finding terkait masuk range.
+  // Ini mencegah site terlihat 0% padahal inspeksi sudah approved/closed.
+  const relatedPlanIdsFromRecords = new Set(recordsInRange.map(r => r.plan_id).filter(Boolean))
+  const relatedPlanIdsFromFindings = new Set(findingsInRange.map(f => f.plan_id).filter(Boolean))
+
+  const dashboardPlans = siteScopedPlans.filter(plan =>
+    planMatchesDate(plan) ||
+    relatedPlanIdsFromRecords.has(plan.id) ||
+    relatedPlanIdsFromFindings.has(plan.id)
+  )
+
+  const dashboardPlanIds = new Set(dashboardPlans.map(p => p.id))
+  const dashboardRecords = siteScopedRecords.filter(record =>
+    (record.plan_id && dashboardPlanIds.has(record.plan_id)) || recordMatchesDate(record)
+  )
+  const dashboardFindings = siteScopedFindings.filter(finding =>
+    (finding.plan_id && dashboardPlanIds.has(finding.plan_id)) || findingMatchesDate(finding)
+  )
   const dashboardSites = [...(effectiveSiteId ? sites.filter(s => s.id === effectiveSiteId) : sites)]
     .sort((a,b)=>String(a.site_code || a.site_name || '').localeCompare(String(b.site_code || b.site_name || ''), 'id', { numeric:true, sensitivity:'base' }))
-  const dashboardPlans = effectiveSiteId ? plans.filter(p => p.site_id === effectiveSiteId) : plans
-  const dashboardRecords = effectiveSiteId ? records.filter(r => r.site_id === effectiveSiteId) : records
-  const dashboardFindings = effectiveSiteId ? findings.filter(f => f.site_id === effectiveSiteId) : findings
   const dashboardUnits = effectiveSiteId ? units.filter(u => u.site_id === effectiveSiteId) : units
 
-  const waitingApproval = dashboardRecords.filter(r => r.status === 'Submitted').length
+  const planById = new Map(dashboardPlans.map(plan => [plan.id, plan]))
+
+  function safePercent(done, target){
+    if (!target) return 0
+    const value = Math.round((done / target) * 100)
+    return Math.max(0, Math.min(Number.isFinite(value) ? value : 0, 100))
+  }
+
+  function completedPlanIdsForCategory(categoryKey, siteId = null){
+    const ids = new Set()
+
+    // Sumber utama: inspection_records Approved.
+    // Ini lebih akurat daripada hanya membaca inspection_plans.status,
+    // karena beberapa data lama bisa tidak sinkron status plan-nya.
+    dashboardRecords.forEach(record => {
+      if (record.status !== 'Approved') return
+      if (!record.plan_id) return
+      const plan = planById.get(record.plan_id) || record.inspection_plans
+      if (!plan) return
+      if (categoryKey && plan.category !== categoryKey && record.category !== categoryKey) return
+      if (siteId && (plan.site_id || record.site_id) !== siteId) return
+      ids.add(record.plan_id)
+    })
+
+    // Fallback: inspection_plans Approved.
+    // Ini menjaga data tetap terbaca kalau record relasi tidak lengkap.
+    dashboardPlans.forEach(plan => {
+      if (plan.status !== 'Approved') return
+      if (categoryKey && plan.category !== categoryKey) return
+      if (siteId && plan.site_id !== siteId) return
+      ids.add(plan.id)
+    })
+
+    return ids
+  }
+
+  function submittedPlanIdsForCategory(categoryKey, siteId = null){
+    const ids = new Set()
+
+    dashboardRecords.forEach(record => {
+      if (record.status !== 'Submitted') return
+      if (!record.plan_id) return
+      const plan = planById.get(record.plan_id) || record.inspection_plans
+      if (!plan) return
+      if (categoryKey && plan.category !== categoryKey && record.category !== categoryKey) return
+      if (siteId && (plan.site_id || record.site_id) !== siteId) return
+      ids.add(record.plan_id)
+    })
+
+    dashboardPlans.forEach(plan => {
+      if (plan.status !== 'Submitted') return
+      if (categoryKey && plan.category !== categoryKey) return
+      if (siteId && plan.site_id !== siteId) return
+      ids.add(plan.id)
+    })
+
+    return ids
+  }
+
+  const waitingApproval = submittedPlanIdsForCategory(null).size
   const openFindings = dashboardFindings.filter(f => f.status === 'Open').length
   const closeRequested = dashboardFindings.filter(f => f.status === 'Close Requested').length
   const closedFindings = dashboardFindings.filter(f => f.status === 'Closed').length
-  const approvedPlans = dashboardPlans.filter(p => p.status === 'Approved').length
+  const approvedPlans = completedPlanIdsForCategory(null).size
   const rejectedPlans = dashboardPlans.filter(p => p.status === 'Rejected').length
 
   const categoryDefs = [
@@ -628,21 +791,20 @@ function Dashboard({ context }){
 
   const categoryStats = categoryDefs.map(def => {
     const catPlans = dashboardPlans.filter(p => p.category === def.key)
-    const catRecords = dashboardRecords.filter(r => r.category === def.key)
+    const catRecords = dashboardRecords.filter(r => r.category === def.key || r.inspection_plans?.category === def.key)
     const catFindings = dashboardFindings.filter(f => f.category === def.key)
-    const planApproved = catPlans.filter(p => p.status === 'Approved').length
-    const planSubmitted = catPlans.filter(p => p.status === 'Submitted').length
-    const recordSubmitted = catRecords.filter(r => r.status === 'Submitted').length
+    const approvedIds = completedPlanIdsForCategory(def.key)
+    const submittedIds = submittedPlanIdsForCategory(def.key)
     const target = def.targetValue === null ? catPlans.length : Math.max(def.targetValue, catPlans.length)
-    const achievement = calcPercent(planApproved, target)
+
     return {
       ...def,
       total_plan:catPlans.length,
-      approved:planApproved,
-      submitted:planSubmitted + recordSubmitted,
+      approved:approvedIds.size,
+      submitted:submittedIds.size,
       rejected:catPlans.filter(p => p.status === 'Rejected').length,
       target,
-      achievement,
+      achievement:safePercent(approvedIds.size, target),
       aman:catRecords.filter(r => r.result === 'Aman').length,
       tidak_aman:catRecords.filter(r => r.result === 'Tidak Aman').length,
       temuan_open:catFindings.filter(f => f.status === 'Open').length,
@@ -652,14 +814,24 @@ function Dashboard({ context }){
   })
 
   const pmPlans = dashboardPlans.filter(p => p.category === 'PM Check')
-  const pmApproved = pmPlans.filter(p => p.status === 'Approved').length
+  const pmApprovedIds = completedPlanIdsForCategory('PM Check')
   const pmUnitTarget = dashboardUnits.length * 2
-  const pmAchievement = calcPercent(pmApproved, pmUnitTarget)
+  const pmAchievement = safePercent(pmApprovedIds.size, pmUnitTarget)
+
   const pmRows = dashboardSites.map(s => {
     const siteUnits = dashboardUnits.filter(u => u.site_id === s.id).length
     const target = siteUnits * 2
-    const actual = pmPlans.filter(p => p.site_id === s.id && p.status === 'Approved').length
-    return { site:s.site_code, site_name:s.site_name, unit_aktif:siteUnits, target_pm_bulanan:target, pm_approved:actual, belum_pm:Math.max(target-actual,0), achievement:`${calcPercent(actual,target)}%` }
+    const actual = completedPlanIdsForCategory('PM Check', s.id).size
+
+    return {
+      site:s.site_code,
+      site_name:s.site_name,
+      unit_aktif:siteUnits,
+      target_pm_bulanan:target,
+      pm_approved:actual,
+      belum_pm:Math.max(target-actual,0),
+      achievement:`${safePercent(actual,target)}%`
+    }
   })
 
   const categoryRows = categoryStats.map(c => ({
@@ -679,11 +851,12 @@ function Dashboard({ context }){
 
   const makeDetailRows = (categoryKey) => dashboardSites.map(s => {
     const catPlans = dashboardPlans.filter(p => p.site_id === s.id && p.category === categoryKey)
-    const catRecords = dashboardRecords.filter(r => r.site_id === s.id && r.category === categoryKey)
+    const catRecords = dashboardRecords.filter(r => r.site_id === s.id && (r.category === categoryKey || r.inspection_plans?.category === categoryKey))
     const catFindings = dashboardFindings.filter(f => f.site_id === s.id && f.category === categoryKey)
-    const approved = catPlans.filter(p => p.status === 'Approved').length
-    const waiting = catRecords.filter(r => r.status === 'Submitted').length + catPlans.filter(p => p.status === 'Submitted').length
+    const approved = completedPlanIdsForCategory(categoryKey, s.id).size
+    const waiting = submittedPlanIdsForCategory(categoryKey, s.id).size
     const total = catPlans.length
+
     return {
       site:s.site_code,
       site_name:s.site_name,
@@ -696,7 +869,7 @@ function Dashboard({ context }){
       temuan_open:catFindings.filter(f => f.status === 'Open').length,
       close_request:catFindings.filter(f => f.status === 'Close Requested').length,
       temuan_closed:catFindings.filter(f => f.status === 'Closed').length,
-      achievement:`${calcPercent(approved,total)}%`
+      achievement:`${safePercent(approved,total)}%`
     }
   })
 
@@ -708,14 +881,16 @@ function Dashboard({ context }){
   const inspectionRows = dashboardRecords.map(r => ({
     tanggal: r.inspected_at ? new Date(r.inspected_at).toLocaleString('id-ID') : '-',
     site: r.sites?.site_code,
-    kategori: r.category,
+    kategori: r.category || r.inspection_plans?.category,
     target: targetLabel(r.inspection_plans),
     hasil: r.result,
     status: r.status,
     catatan: r.notes || '-'
   }))
+
   const findingRows = dashboardFindings.map(f => ({
     created: f.created_at ? new Date(f.created_at).toLocaleDateString('id-ID') : '-',
+    updated: f.updated_at ? new Date(f.updated_at).toLocaleDateString('id-ID') : '-',
     site: f.sites?.site_code,
     kategori: f.category,
     target: f.target_label,
@@ -727,6 +902,7 @@ function Dashboard({ context }){
 
   if (loading) return <Panel title="Dashboard"><p className="muted">Memuat dashboard...</p></Panel>
   if (error) return <Panel title="Dashboard"><div className="error">{error}</div><button onClick={load}>Coba Lagi</button></Panel>
+
   return <div className="stack dashboard-redesign">
     <DashboardV52Styles />
     <DashboardDateFilter
@@ -771,9 +947,8 @@ function Dashboard({ context }){
       <DataTable rows={categoryRows}/>
     </Panel>
 
-
     <Panel title="Dashboard PM Check" desc="Pencapaian PM Check dihitung dari target 2 kali PM Check per unit aktif setiap bulan." action={<button onClick={()=>downloadXlsx('dashboard-pm-check.xlsx', pmRows)}><Download size={16}/> Export Excel</button>}>
-      <div className="summary-strip"><span><b>{dashboardUnits.length}</b> Unit Aktif</span><span><b>{pmUnitTarget}</b> Target PM/Bulan</span><span><b>{pmApproved}</b> PM Approved</span><span><b>{pmAchievement}%</b> Achievement PM</span></div>
+      <div className="summary-strip"><span><b>{dashboardUnits.length}</b> Unit Aktif</span><span><b>{pmUnitTarget}</b> Target PM/Bulan</span><span><b>{pmApprovedIds.size}</b> PM Approved</span><span><b>{pmAchievement}%</b> Achievement PM</span></div>
       <div className="site-chart">
         {pmRows.map(r => <div className="site-bar" key={r.site}>
           <div className="site-meta"><b>{r.site}</b><span>{r.pm_approved}/{r.target_pm_bulanan} · {r.achievement}</span></div>
