@@ -69,6 +69,24 @@ function isFoodDashboardVisibleSite(site){
   return !isFoodDashboardHiddenSiteCode(site?.site_code)
 }
 
+async function fetchAllRows(table, select='*', buildQuery=null, pageSize=1000){
+  const all = []
+  for(let from=0;;from+=pageSize){
+    let query = supabase.from(table).select(select)
+    if(buildQuery) query = buildQuery(query)
+    const { data, error } = await query.range(from, from + pageSize - 1)
+    if(error) throw error
+    const rows = data || []
+    all.push(...rows)
+    if(rows.length < pageSize) break
+  }
+  return all
+}
+function isActiveFoodStatus(v){
+  const key = cleanText(v).toUpperCase().replace(/[^A-Z0-9]/g, '')
+  return !key || key === 'AKTIF' || key === 'ACTIVE'
+}
+
 const MENUS = [
   ['dashboard', 'Dashboard', LayoutDashboard],
   ['admin', 'Admin Panel', Users],
@@ -1365,9 +1383,7 @@ function renderCell(v, column){
 }
 
 async function fetchSites(){
-  const { data, error } = await supabase.from('sites').select('id,site_code,site_name,status').order('site_code')
-  if (error) throw error
-  return data || []
+  return fetchAllRows('sites', 'id,site_code,site_name,status', q => q.order('site_code'))
 }
 function applySiteFilter(query, context, field='site_id'){
   if (adminCanSeeAll(context)) return query
@@ -1441,15 +1457,138 @@ function outstandingMatchesDashboardPeriod(row, year, month, week='ALL'){
   if (week !== 'ALL') return outstandingWeekStart === week
   return sameMonth(outstandingWeekStart, year, month)
 }
+
+// V71 FIX - periode dashboard Food Index harus membaca overlap minggu task, bukan hanya week_start_date.
+// Case: task minggu ini sudah Approved, tetapi KPI dashboard masih 0 karena task tidak masuk scope filter.
+function foodTaskWeekRange(task){
+  const start = String(task?.week_start_date || '').slice(0,10)
+  const end = String(task?.week_end_date || '').slice(0,10) || (start ? endOfWeekSunday(start) : '')
+  return { start, end }
+}
+function dateRangeOverlap(startA, endA, startB, endB){
+  if (!startA || !endA || !startB || !endB) return false
+  return startA <= endB && endA >= startB
+}
+function foodTaskMatchesDashboardPeriod(task, year, month, week='ALL'){
+  const { start, end } = foodTaskWeekRange(task)
+  if (!start) return false
+
+  if (week !== 'ALL') {
+    const selectedWeekStart = String(week || '').slice(0,10)
+    const selectedWeekEnd = selectedWeekStart ? endOfWeekSunday(selectedWeekStart) : ''
+    return dateRangeOverlap(start, end, selectedWeekStart, selectedWeekEnd)
+  }
+
+  if (year === 'ALL' && month === 'ALL') return true
+
+  if (year !== 'ALL' && month !== 'ALL') {
+    const periodStart = `${year}-${String(month).padStart(2,'0')}-01`
+    const periodEnd = new Date(Number(year), Number(month), 0).toISOString().slice(0,10)
+    return dateRangeOverlap(start, end, periodStart, periodEnd)
+  }
+
+  if (year !== 'ALL') {
+    return dateRangeOverlap(start, end, `${year}-01-01`, `${year}-12-31`)
+  }
+
+  if (month !== 'ALL') {
+    const m = String(month).padStart(2,'0')
+    return start.slice(5,7) === m || end.slice(5,7) === m
+  }
+
+  return true
+}
 function pctValue(n, d){ return d ? (Number(n || 0) / Number(d || 0)) * 100 : 0 }
 function fmtPct(value){
   const n = Number(value || 0)
   return `${Number.isFinite(n) ? n.toFixed(2) : '0.00'}%`
 }
-function taskIsApproved(task){ return String(task?.status || '') === 'Approved' }
+function normalizeFoodTaskStatusValue(value){
+  const raw = cleanText(value)
+  const key = raw.toLowerCase().replace(/[\s_-]+/g, '')
+
+  if (!key) return 'Open'
+  if (['approved','approve','closed','close'].includes(key)) return 'Approved'
+  if (['waitingapproval','waitapproval','waitingapprove','menungguapproval'].includes(key)) return 'Waiting Approval'
+  if (['needactionplan','actionplan','needap','butuhactionplan'].includes(key)) return 'Need Action Plan'
+  if (['inprogress','progress','started','start'].includes(key)) return 'In Progress'
+  if (['rejected','reject','ditolak'].includes(key)) return 'Rejected'
+  if (['expired','expire','kedaluwarsa'].includes(key)) return 'Expired'
+  if (['open','planned','plan'].includes(key)) return 'Open'
+
+  return raw || 'Open'
+}
+
+// V70 FIX:
+// Dashboard dan tasklist tidak boleh hanya percaya kolom status mentah.
+// Jika approved_at / approved_by sudah terisi, task dianggap Approved walaupun status mentah masih Waiting Approval.
+function normalizeFoodLifecycleStatus(value){
+  const raw = cleanText(value)
+  const key = raw.toLowerCase().replace(/[\s_-]+/g, '')
+
+  if (!key) return ''
+  if (['approved','approve','closed','close','validated','valid'].includes(key)) return 'Approved'
+  if (['waitingapproval','waitapproval','waitingapprove','menungguapproval'].includes(key)) return 'Waiting Approval'
+  if (['waitingcloseapproval','waitingclose','closeapproval'].includes(key)) return 'Waiting Close Approval'
+  if (['needactionplan','actionplan','needap','butuhactionplan'].includes(key)) return 'Need Action Plan'
+  if (['inprogress','progress','started','start'].includes(key)) return 'In Progress'
+  if (['rejected','reject','ditolak'].includes(key)) return 'Rejected'
+  if (['expired','expire','kedaluwarsa'].includes(key)) return 'Expired'
+  if (['open','planned','plan'].includes(key)) return 'Open'
+
+  return raw
+}
+
+function taskHasApprovedFindingEvidence(task){
+  const findings = Array.isArray(task?.food_findings) ? task.food_findings : []
+  if (!findings.length) return false
+
+  return findings.every(f => {
+    const status = normalizeFoodLifecycleStatus(f?.status)
+    return (
+      status === 'Approved' ||
+      status === 'Closed' ||
+      Boolean(f?.validated_at) ||
+      Boolean(f?.approved_at)
+    )
+  })
+}
+
+function taskHasClosedOutstandingEvidence(task){
+  const outstandings = Array.isArray(task?.food_outstandings) ? task.food_outstandings : []
+  if (!outstandings.length) return false
+
+  return outstandings.every(o => {
+    const status = normalizeFoodLifecycleStatus(o?.status)
+    return (
+      status === 'Approved' ||
+      status === 'Closed' ||
+      Boolean(o?.approved_at)
+    )
+  })
+}
+
+function taskHasApprovedRelatedEvidence(task){
+  return taskHasApprovedFindingEvidence(task) || taskHasClosedOutstandingEvidence(task)
+}
+
+// V72 FIX:
+// Dashboard Food Index tidak boleh tetap Waiting Approval jika approval sudah selesai
+// tetapi status task belum sinkron. Selain status/approved_at, dashboard juga membaca
+// bukti final dari finding/outstanding yang sudah Approved/Closed.
+function foodTaskEffectiveStatus(task){
+  const normalized = normalizeFoodTaskStatusValue(task?.status)
+  if (normalized === 'Approved') return 'Approved'
+  if (task?.approved_at || task?.approved_by) return 'Approved'
+  if (taskHasApprovedRelatedEvidence(task)) return 'Approved'
+  return normalized
+}
+
+function taskIsApproved(task){ return foodTaskEffectiveStatus(task) === 'Approved' }
 function taskHasInspectionData(task){
   const answers = task?.food_inspection_answers || []
-  return Boolean(task?.submitted_at || task?.approved_at || answers.length || ['Approved','Expired','Waiting Approval','Need Action Plan'].includes(String(task?.status || '')))
+  const status = foodTaskEffectiveStatus(task)
+  return Boolean(task?.submitted_at || task?.approved_at || answers.length || ['Approved','Expired','Waiting Approval','Need Action Plan'].includes(status))
 }
 function achievementRemark(score, task){
   if (task && !taskIsApproved(task)) return 'Not Yet Approved'
@@ -1465,18 +1604,75 @@ function taskHasActualInspectionWork(task){
 }
 function scoreInspectionDisplay(task, score){
   const hasWork = taskHasActualInspectionWork(task)
-  const expiredByStatusOrDate = String(task?.status || '') === 'Expired' || taskWeekIsExpired(task)
+  const status = foodTaskEffectiveStatus(task)
+  const expiredByStatusOrDate = status === 'Expired' || taskWeekIsExpired(task)
+
+  if (taskIsApproved(task)) {
+    return {
+      status: 'Approved',
+      remark: Number(score || 0) >= 95 ? 'Tercapai' : 'Tidak tercapai'
+    }
+  }
 
   // Khusus tabel Score Food Index per Inspeksi:
-  // - sudah inspeksi tetapi belum approved: tampil sebagai Open + Not Yet Approved
-  // - belum dilakukan sampai lewat minggu: tampil sebagai Expired + Are Not Done
-  if (hasWork && !taskIsApproved(task)) return { status: 'Open', remark: 'Not Yet Approved' }
+  // - sudah inspeksi tetapi belum approved: tampil sesuai status real approval queue.
+  // - belum dilakukan sampai lewat minggu: tampil sebagai Expired + Are Not Done.
+  if (hasWork) return { status, remark: 'Not Yet Approved' }
   if (!hasWork && expiredByStatusOrDate) return { status: 'Expired', remark: 'Are Not Done' }
-  if (!hasWork) return { status: String(task?.status || 'Open') || 'Open', remark: 'Are Not Done' }
-  return {
-    status: String(task?.status || '-') || '-',
-    remark: Number(score || 0) >= 95 ? 'Tercapai' : 'Tidak tercapai'
+  return { status: status || 'Open', remark: 'Are Not Done' }
+}
+
+function foodTaskStatusRank(task){
+  const status = foodTaskEffectiveStatus(task)
+  const rank = {
+    'Approved': 100,
+    'Waiting Approval': 80,
+    'Need Action Plan': 70,
+    'In Progress': 60,
+    'Rejected': 50,
+    'Open': 40,
+    'Expired': 10
   }
+  return rank[status] || 0
+}
+
+function foodTaskLatestTime(task){
+  return Date.parse(task?.approved_at || task?.submitted_at || task?.updated_at || task?.generated_at || task?.created_at || task?.week_start_date || '') || 0
+}
+
+function foodTaskDashboardKey(task){
+  return [
+    task?.site_id || '',
+    task?.vendor_id || task?.food_vendors?.id || '',
+    task?.week_start_date || ''
+  ].join('::')
+}
+
+// V70 FIX:
+// Jika ada duplicate task vendor-site-week, dashboard memakai status paling final.
+// Ini mencegah halaman depan masih menampilkan Waiting Approval saat sudah ada task Approved untuk scope yang sama.
+function dedupeFoodDashboardTasks(rows){
+  const map = new Map()
+  ;(rows || []).forEach(task => {
+    const key = foodTaskDashboardKey(task)
+    const current = map.get(key)
+    if (!current) {
+      map.set(key, task)
+      return
+    }
+
+    const taskRank = foodTaskStatusRank(task)
+    const currentRank = foodTaskStatusRank(current)
+
+    if (
+      taskRank > currentRank ||
+      (taskRank === currentRank && foodTaskLatestTime(task) >= foodTaskLatestTime(current))
+    ) {
+      map.set(key, task)
+    }
+  })
+
+  return Array.from(map.values())
 }
 
 
@@ -1502,13 +1698,11 @@ function FoodAdminPanel({ context, profile }){
       setSites(siteData || [])
       setApp(foodApp)
       setManual(prev => ({ ...prev, site_id: prev.site_id || context?.site_id || '' }))
-      let q = supabase.from('user_app_access')
-        .select('id,user_id,app_id,role,food_role_level,site_id,status,created_at,users_profile(id,nama,email,nrp,status),sites(id,site_code,site_name)')
-        .eq('app_id', foodApp.id)
-        .order('created_at', { ascending:false })
-      if (!adminCanSeeAll(context) && context?.site_id) q = q.eq('site_id', context.site_id)
-      const { data, error } = await q
-      if (error) throw error
+      const data = await fetchAllRows('user_app_access', 'id,user_id,app_id,role,food_role_level,site_id,status,created_at,users_profile(id,nama,email,nrp,status),sites(id,site_code,site_name)', q => {
+        q = q.eq('app_id', foodApp.id).order('created_at', { ascending:false })
+        if (!adminCanSeeAll(context) && context?.site_id) q = q.eq('site_id', context.site_id)
+        return q
+      })
       setAccessRows(data || [])
     } catch(e){ setError(e.message) }
     setLoading(false)
@@ -1697,49 +1891,52 @@ function FoodDashboard({ context }){
         monthStart = `${yearFilter}-01-01`
         monthEndDate = `${yearFilter}-12-31`
       }
-      let tq = supabase
-        .from('food_weekly_tasks')
-        .select(`
+      const [t, o, v, p, sigs] = await Promise.all([
+        fetchAllRows('food_weekly_tasks', `
           *,
           sites(site_code,site_name),
           food_vendors(id,vendor_name),
           food_inspection_answers(id, score, finding_note, evidence_photo_url, food_parameters(category, parameter_text, sort_order)),
-          food_findings(id, due_date, corrective_action, preventive_action, status)
-        `)
-        .order('week_start_date', { ascending:false })
-      if (monthStart && monthEndDate) tq = tq.gte('week_start_date', monthStart).lte('week_start_date', monthEndDate)
-      let oq = supabase
-        .from('food_outstandings')
-        .select('*, food_findings(corrective_action, preventive_action, due_date, food_inspection_answers(finding_note, evidence_photo_url, food_parameters(parameter_text)), food_weekly_tasks(id, site_id, week_start_date, week_end_date, submitted_at, approved_at, status, sites(site_code,site_name), food_vendors(vendor_name)))')
-        .order('created_at', { ascending:false })
-        .limit(1000)
-      let vq = supabase.from('food_vendors').select('id, site_id, vendor_name, status').eq('status','Aktif')
-      let pq = supabase.from('food_parameters').select('id').eq('status','Aktif')
-      let sq = supabase
-        .from('food_inspection_signatures')
-        .select('id, task_id, signer_user_id, site_id, signer_name, signer_nrp, signer_role, signed_at, food_weekly_tasks!inner(id, site_id, week_start_date, week_end_date, status, sites(site_code,site_name))')
-        .order('signed_at', { ascending:false })
-        .limit(5000)
-      if (monthStart && monthEndDate) sq = sq.gte('food_weekly_tasks.week_start_date', monthStart).lte('food_weekly_tasks.week_start_date', monthEndDate)
-      tq = applySiteFilter(tq, context)
-      vq = applySiteFilter(vq, context)
-      if (!adminCanSeeAll(context)) { oq = oq.eq('task_id', '00000000-0000-0000-0000-000000000000'); sq = sq.eq('food_weekly_tasks.site_id', context.site_id) }
-      if (adminCanSeeAll(context) && siteFilter) { tq = tq.eq('site_id', siteFilter); vq = vq.eq('site_id', siteFilter); sq = sq.eq('food_weekly_tasks.site_id', siteFilter) }
-      const [{ data:t, error:te }, { data:o, error:oe }, { data:v, error:ve }, { data:p, error:pe }, { data:sigs, error:se }] = await Promise.all([tq, oq, vq, pq, sq])
-      if (te) throw te
-      if (ve) throw ve
-      if (pe) throw pe
-      if (oe && adminCanSeeAll(context)) throw oe
-      if (se && !String(se.message || '').includes('food_inspection_signatures')) throw se
+          food_findings(id, due_date, corrective_action, preventive_action, status, validated_at),
+          food_outstandings(id, status, corrective_photo_url, preventive_photo_url, closed_at, approved_at)
+        `, q => {
+          // V71 FIX:
+          // Jangan filter tanggal di query Supabase berdasarkan week_start_date saja.
+          // Dashboard akan filter periode di JS memakai overlap week_start_date-week_end_date.
+          // Ini mencegah task yang sudah Approved tidak ikut masuk KPI.
+          q = q.order('week_start_date', { ascending:false })
+          q = applySiteFilter(q, context)
+          if (adminCanSeeAll(context) && siteFilter) q = q.eq('site_id', siteFilter)
+          return q
+        }),
+        adminCanSeeAll(context) ? fetchAllRows('food_outstandings', '*, food_findings(corrective_action, preventive_action, due_date, food_inspection_answers(finding_note, evidence_photo_url, food_parameters(parameter_text)), food_weekly_tasks(id, site_id, week_start_date, week_end_date, submitted_at, approved_at, status, sites(site_code,site_name), food_vendors(vendor_name)))', q => q.order('created_at', { ascending:false })) : Promise.resolve([]),
+        fetchAllRows('food_vendors', 'id, site_id, vendor_name, status', q => {
+          q = applySiteFilter(q, context)
+          if (adminCanSeeAll(context) && siteFilter) q = q.eq('site_id', siteFilter)
+          return q
+        }),
+        fetchAllRows('food_parameters', 'id,status', q => q.order('id')),
+        fetchAllRows('food_inspection_signatures', 'id, task_id, signer_user_id, site_id, signer_name, signer_nrp, signer_role, signed_at, food_weekly_tasks!inner(id, site_id, week_start_date, week_end_date, status, sites(site_code,site_name))', q => {
+          q = q.order('signed_at', { ascending:false })
+          if (monthStart && monthEndDate) q = q.gte('food_weekly_tasks.week_start_date', monthStart).lte('food_weekly_tasks.week_start_date', monthEndDate)
+          if (!adminCanSeeAll(context)) q = q.eq('food_weekly_tasks.site_id', context.site_id)
+          if (adminCanSeeAll(context) && siteFilter) q = q.eq('food_weekly_tasks.site_id', siteFilter)
+          return q
+        })
+      ])
       const hideDashboardSite = (siteId, siteCode) => hiddenDashboardSiteIds.has(siteId) || isFoodDashboardHiddenSiteCode(siteCode)
-      const dashboardTasks = (t || []).filter(row => !hideDashboardSite(row.site_id, row.sites?.site_code))
+      const dashboardTasks = dedupeFoodDashboardTasks(
+        (t || [])
+          .filter(row => !hideDashboardSite(row.site_id, row.sites?.site_code))
+          .filter(row => foodTaskMatchesDashboardPeriod(row, yearFilter, monthFilter, weekFilter))
+      )
       const dashboardOuts = (o || []).filter(row => {
         const task = row.food_findings?.food_weekly_tasks || {}
         if (hideDashboardSite(task.site_id, task.sites?.site_code)) return false
         if (adminCanSeeAll(context) && siteFilter && task.site_id !== siteFilter) return false
         return outstandingMatchesDashboardPeriod(row, yearFilter, monthFilter, weekFilter)
       })
-      const dashboardVendors = (v || []).filter(row => !hideDashboardSite(row.site_id, ''))
+      const dashboardVendors = (v || []).filter(row => isActiveFoodStatus(row.status)).filter(row => !hideDashboardSite(row.site_id, ''))
       const dashboardSignatures = (sigs || []).filter(row => {
         const task = row.food_weekly_tasks || {}
         return !hideDashboardSite(row.site_id || task.site_id, task.sites?.site_code)
@@ -1747,13 +1944,13 @@ function FoodDashboard({ context }){
       setTasks(dashboardTasks)
       setOuts(adminCanSeeAll(context) ? dashboardOuts : [])
       setVendors(dashboardVendors)
-      setParameters(p || [])
+      setParameters((p || []).filter(x => isActiveFoodStatus(x.status)))
       setSignatureRows(dashboardSignatures)
     } catch(e){ setError(e.message) }
     setLoading(false)
   }
 
-  const filteredTasks = weekFilter === 'ALL' ? tasks : tasks.filter(t => t.week_start_date === weekFilter)
+  const filteredTasks = tasks.filter(t => foodTaskMatchesDashboardPeriod(t, yearFilter, monthFilter, weekFilter))
   const filteredOuts = outs.filter(o => outstandingMatchesDashboardPeriod(o, yearFilter, monthFilter, weekFilter))
   const filteredSignatureRows = weekFilter === 'ALL' ? signatureRows : signatureRows.filter(sig => {
     const task = sig.food_weekly_tasks || {}
@@ -1761,10 +1958,11 @@ function FoodDashboard({ context }){
   })
   const weekTasks = filteredTasks
   const total = weekTasks.length
-  const approved = weekTasks.filter(t => t.status === 'Approved').length
-  const expired = weekTasks.filter(t => t.status === 'Expired').length
+  const approvedTaskIds = new Set(weekTasks.filter(taskIsApproved).map(task => task.id))
+  const approved = approvedTaskIds.size
+  const expired = weekTasks.filter(t => foodTaskEffectiveStatus(t) === 'Expired').length
   const achievement = pctValue(approved, total)
-  const alertRows = weekTasks.filter(t => thursdayAlert && ['Open','In Progress','Need Action Plan'].includes(t.status))
+  const alertRows = weekTasks.filter(t => thursdayAlert && ['Open','In Progress','Need Action Plan','Waiting Approval'].includes(foodTaskEffectiveStatus(t)) && !taskIsApproved(t))
   const reportRows = filteredOuts.slice(0, 8).map((o, idx) => {
     const f = o.food_findings || {}
     const answer = f.food_inspection_answers || {}
@@ -1784,7 +1982,7 @@ function FoodDashboard({ context }){
   })
 
   const scoreRows = filteredTasks
-    .filter(t => taskHasActualInspectionWork(t) || ['Approved','Expired','Waiting Approval','Need Action Plan'].includes(String(t.status || '')))
+    .filter(t => taskHasActualInspectionWork(t) || ['Approved','Expired','Waiting Approval','Need Action Plan'].includes(foodTaskEffectiveStatus(t)))
     .map((t, idx) => {
       const answers = t.food_inspection_answers || []
       const totalParam = answers.length || parameters.length || 0
@@ -1848,7 +2046,7 @@ function FoodDashboard({ context }){
     .map((s, idx) => {
       const siteSignatures = filteredSignatureRows.filter(sig => {
         const task = sig.food_weekly_tasks || {}
-        return task.site_id === s.id && sameMonth(task.week_start_date, yearFilter, monthFilter)
+        return task.site_id === s.id && foodTaskMatchesDashboardPeriod(task, yearFilter, monthFilter, weekFilter)
       })
       const counts = {}
       Object.keys(FOOD_ROLE_TARGETS).forEach(role => { counts[role] = siteSignatures.filter(sig => normalizeRole(sig.signer_role) === role).length })
@@ -1973,7 +2171,7 @@ function FoodDashboard({ context }){
         <h3>Alert Mingguan</h3>
         <p>Mulai Kamis, site yang belum inspeksi ditampilkan sebagai prioritas.</p>
         <div className="alert-stack-v43">
-          {loading ? <div className="mini-alert">Memuat alert...</div> : alertRows.length ? alertRows.slice(0, 6).map((t, i) => <div className="mini-alert" key={t.id || i}><div className="mini-alert-icon"><AlertTriangle size={18}/></div><div><b>{t.sites?.site_code || '-'} belum inspeksi</b><span>{t.food_vendors?.vendor_name || 'Vendor'} masih status {t.status}</span></div></div>) : <div className="mini-alert"><div className="mini-alert-icon"><CheckCircle2 size={18}/></div><div><b>Tidak ada alert</b><span>Semua task minggu ini aman sesuai filter.</span></div></div>}
+          {loading ? <div className="mini-alert">Memuat alert...</div> : alertRows.length ? alertRows.slice(0, 6).map((t, i) => <div className="mini-alert" key={t.id || i}><div className="mini-alert-icon"><AlertTriangle size={18}/></div><div><b>{t.sites?.site_code || '-'} belum inspeksi</b><span>{t.food_vendors?.vendor_name || 'Vendor'} masih status {foodTaskEffectiveStatus(t)}</span></div></div>) : <div className="mini-alert"><div className="mini-alert-icon"><CheckCircle2 size={18}/></div><div><b>Tidak ada alert</b><span>Semua task minggu ini aman sesuai filter.</span></div></div>}
           {expired > 0 && <div className="mini-alert"><div className="mini-alert-icon">⏳</div><div><b>{expired} task expired</b><span>Task expired menurunkan achievement site.</span></div></div>}
         </div>
       </aside>
@@ -1994,10 +2192,7 @@ function FoodVendors({ context }){
     setError('')
     try {
       setSites(await fetchSites())
-      let q = supabase.from('food_vendors').select('*, sites(site_code,site_name)').order('created_at', { ascending:false })
-      q = applySiteFilter(q, context)
-      const { data, error } = await q
-      if (error) throw error
+      const data = await fetchAllRows('food_vendors', '*, sites(site_code,site_name)', q => applySiteFilter(q.order('created_at', { ascending:false }), context))
       setVendors(data || [])
     } catch(e){ setError(e.message) }
   }
@@ -2021,11 +2216,7 @@ function FoodVendors({ context }){
     const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]).map(normalizeRow)
     const siteList = await fetchSites()
     const siteMap = new Map(siteList.map(s => [String(s.site_code).toUpperCase(), s]))
-    const { data: existingData, error: existingError } = await supabase
-      .from('food_vendors')
-      .select('id, site_id, vendor_name, status, sites(site_code)')
-      .eq('status', 'Aktif')
-    if (existingError) throw existingError
+    const existingData = (await fetchAllRows('food_vendors', 'id, site_id, vendor_name, status, sites(site_code)', q => q.order('vendor_name'))).filter(v => isActiveFoodStatus(v.status))
 
     const normalizeKey = (siteId, name) => `${siteId || ''}::${cleanText(name).toUpperCase().replace(/\s+/g, ' ')}`
     const existingActive = new Set((existingData || []).map(v => normalizeKey(v.site_id, v.vendor_name)))
@@ -2036,7 +2227,7 @@ function FoodVendors({ context }){
       const site = siteMap.get(siteCode)
       const vendor_name = cleanText(getVal(r, ['vendor_name','VENDOR_NAME','nama_vendor','Nama Vendor']))
       const status = cleanText(getVal(r, ['status','STATUS'])) || 'Aktif'
-      const isActive = String(status).toLowerCase() === 'aktif'
+      const isActive = isActiveFoodStatus(status)
       const key = normalizeKey(site?.id, vendor_name)
       let err = !site ? 'site_code tidak ditemukan' : !vendor_name ? 'vendor_name wajib diisi' : ''
       if (!err && isActive) {
@@ -2093,9 +2284,10 @@ function FoodParameters({ context }){
 
   useEffect(() => { load() }, [])
   async function load(){
-    const { data, error } = await supabase.from('food_parameters').select('*').order('sort_order')
-    if (error) setError(error.message)
-    setRows(data || [])
+    try{
+      const data = await fetchAllRows('food_parameters', '*', q => q.order('sort_order'))
+      setRows(data || [])
+    }catch(e){ setError(e.message) }
   }
 
   function resetForm(){
@@ -2399,20 +2591,17 @@ function FoodTasks({ context, profile }){
         fetchTasks()
       ])
       if (pe) throw pe
-      setParameters(p || [])
+      setParameters((p || []).filter(x => isActiveFoodStatus(x.status)))
       setTasks(taskRes || [])
     } catch(e){ setError(e.message) }
     setLoading(false)
   }
   async function fetchTasks(){
-    let q = supabase.from('food_weekly_tasks')
-      .select('*, sites(site_code,site_name), food_vendors(vendor_name)')
-      .eq('week_start_date', monday)
-      .order('generated_at', { ascending:false })
-    q = applySiteFilter(q, context)
-    const { data, error } = await q
-    if (error) throw error
-    return data || []
+    return fetchAllRows(
+      'food_weekly_tasks',
+      '*, sites(site_code,site_name), food_vendors(vendor_name), food_findings(id, status, validated_at), food_outstandings(id, status, closed_at, approved_at)',
+      q => applySiteFilter(q.eq('week_start_date', monday).order('generated_at', { ascending:false }), context)
+    )
   }
   async function openTask(task){
     setMsg(''); setError('')
@@ -2635,13 +2824,16 @@ function FoodTasks({ context, profile }){
   }
 
   const rows = tasks.map(toTaskRow)
-  const canOpen = t => ['Open','In Progress','Rejected'].includes(t.status)
+  const canOpen = t => ['Open','In Progress','Rejected'].includes(foodTaskEffectiveStatus(t))
   const answeredCount = parameters.filter(p => ['0','1'].includes(String(answers[p.id]?.score ?? ''))).length
   const findingCount = parameters.filter(p => String(answers[p.id]?.score ?? '') === '0').length
   return <div className="stack">
     {msg && <div className="success">{msg}</div>}{error && <div className="error">{error}</div>}
     <Panel title="Tasklist Mingguan Food Index" desc="Task otomatis dibuat berdasarkan vendor catering aktif di site. Klik Start untuk mulai inspeksi." action={<button className="secondary" onClick={load} disabled={loading}>{loading ? 'Memuat...' : 'Refresh / Generate Task'}</button>}>
-      {loading ? <p>Memuat task...</p> : <div className="table-wrap" style={{maxHeight:500, overflow:'auto'}}><table><thead><tr><th>Site</th><th>Vendor</th><th>Minggu</th><th>Status</th><th>Mulai</th><th>Submit</th><th>Approval</th><th>Aksi</th></tr></thead><tbody>{tasks.map(t => <tr key={t.id}><td>{t.sites?.site_code || '-'}</td><td>{t.food_vendors?.vendor_name || '-'}</td><td>{t.week_start_date} s/d {t.week_end_date}</td><td>{renderCell(t.status)}</td><td>{t.started_at?.slice(0,16)?.replace('T',' ') || '-'}</td><td>{t.submitted_at?.slice(0,16)?.replace('T',' ') || '-'}</td><td>{t.approved_at?.slice(0,16)?.replace('T',' ') || '-'}</td><td>{canOpen(t) ? <button onClick={()=>openTask(t)}>{t.status === 'Open' ? 'Start Inspeksi' : 'Lanjut / Edit'}</button> : <span className="muted">-</span>}</td></tr>)}</tbody></table>{!tasks.length && <p className="muted table-empty">Belum ada task minggu ini. Pastikan Master Vendor Catering aktif sudah tersedia.</p>}</div>}
+      {loading ? <p>Memuat task...</p> : <div className="table-wrap" style={{maxHeight:500, overflow:'auto'}}><table><thead><tr><th>Site</th><th>Vendor</th><th>Minggu</th><th>Status</th><th>Mulai</th><th>Submit</th><th>Approval</th><th>Aksi</th></tr></thead><tbody>{tasks.map(t => {
+        const effectiveStatus = foodTaskEffectiveStatus(t)
+        return <tr key={t.id}><td>{t.sites?.site_code || '-'}</td><td>{t.food_vendors?.vendor_name || '-'}</td><td>{t.week_start_date} s/d {t.week_end_date}</td><td>{renderCell(effectiveStatus)}</td><td>{t.started_at?.slice(0,16)?.replace('T',' ') || '-'}</td><td>{t.submitted_at?.slice(0,16)?.replace('T',' ') || '-'}</td><td>{t.approved_at?.slice(0,16)?.replace('T',' ') || '-'}</td><td>{canOpen(t) ? <button onClick={()=>openTask(t)}>{effectiveStatus === 'Open' ? 'Start Inspeksi' : 'Lanjut / Edit'}</button> : <span className="muted">-</span>}</td></tr>
+      })}</tbody></table>{!tasks.length && <p className="muted table-empty">Belum ada task minggu ini. Pastikan Master Vendor Catering aktif sudah tersedia.</p>}</div>}
     </Panel>
     <Panel title="Export Tasklist" action={<button onClick={()=>downloadXlsx('food-index-tasklist.xlsx', rows)}><Download size={16}/> Export</button>}>
       <Table rows={rows} empty="Belum ada task untuk diexport." />
@@ -3071,10 +3263,13 @@ function FoodApproval({ context, profile }){
     try {
       if (!isTaskReady(task)) throw new Error('Masih ada temuan yang belum punya corrective, preventive action, dan due date.')
       const now = new Date().toISOString()
-      const { error: te } = await supabase.from('food_weekly_tasks')
+      const { data: approvedTask, error: te } = await supabase.from('food_weekly_tasks')
         .update({ status:'Approved', approved_by:profile?.id, approved_at:now, updated_at:now })
         .eq('id', task.id)
+        .select('id, status, approved_at')
+        .maybeSingle()
       if (te) throw te
+      if (!approvedTask) throw new Error('Approval gagal disimpan. Task tidak ditemukan atau akses update ditolak oleh Supabase.')
       const { error: fe } = await supabase.from('food_findings')
         .update({ status:'Approved', updated_at:now })
         .eq('task_id', task.id)
