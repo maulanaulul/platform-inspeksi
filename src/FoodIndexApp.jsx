@@ -1252,6 +1252,92 @@ function FoodIndexScopedStyles(){
     .food-index-app .driver-results button span { display:block; color:#64748b; font-size:12px; margin-top:3px; }
 
 
+    /* v73: modal review approval harus tetap interaktif dan memiliki satu area scroll yang jelas. */
+    .food-index-app .approval-review-backdrop {
+      align-items:center !important;
+      justify-content:center !important;
+      overflow:hidden !important;
+      padding:18px !important;
+    }
+    .food-index-app .approval-review-modal {
+      width:min(1120px, calc(100vw - 36px)) !important;
+      height:calc(100dvh - 36px) !important;
+      max-height:calc(100dvh - 36px) !important;
+      min-height:0 !important;
+      display:flex !important;
+      flex-direction:column !important;
+      overflow:hidden !important;
+      margin:auto !important;
+      padding:0 !important;
+    }
+    .food-index-app .approval-review-modal .food-modal-head,
+    .food-index-app .approval-review-modal .sticky-actions {
+      flex:0 0 auto !important;
+    }
+    .food-index-app .approval-review-body {
+      flex:1 1 auto;
+      min-height:0;
+      overflow-y:auto;
+      overflow-x:hidden;
+      overscroll-behavior:contain;
+      scroll-behavior:smooth;
+      background:#fff;
+    }
+    .food-index-app .approval-review-body::-webkit-scrollbar { width:10px; }
+    .food-index-app .approval-review-body::-webkit-scrollbar-thumb { background:#94a3b8; border-radius:999px; }
+    .food-index-app .approval-review-modal .inspection-summary {
+      position:sticky;
+      top:0;
+      z-index:2;
+      padding-bottom:14px;
+      background:#fff;
+    }
+    .food-index-app .approval-review-modal .inspection-scroll {
+      display:grid !important;
+      flex:none !important;
+      min-height:0 !important;
+      max-height:none !important;
+      overflow:visible !important;
+      padding:16px 30px 28px !important;
+      gap:14px !important;
+    }
+    .food-index-app .approval-review-modal .approval-detail-grid {
+      grid-template-columns:repeat(3, minmax(0, 1fr));
+    }
+    .food-index-app .approval-review-modal .sticky-actions {
+      position:static !important;
+      margin:0 !important;
+      padding:16px 30px 20px !important;
+      border-top:1px solid #e8eef8 !important;
+      background:#fff !important;
+    }
+    @media (max-width:760px) {
+      .food-index-app .approval-review-backdrop {
+        align-items:flex-start !important;
+        padding:10px !important;
+      }
+      .food-index-app .approval-review-modal {
+        width:100% !important;
+        height:calc(100dvh - 20px) !important;
+        max-height:calc(100dvh - 20px) !important;
+      }
+      .food-index-app .approval-review-modal .inspection-summary,
+      .food-index-app .approval-review-modal .approval-detail-grid {
+        grid-template-columns:1fr !important;
+      }
+      .food-index-app .approval-review-modal .inspection-summary {
+        position:static;
+        padding:14px 18px 0;
+      }
+      .food-index-app .approval-review-modal .inspection-scroll {
+        padding:14px 18px 24px !important;
+      }
+      .food-index-app .approval-review-modal .sticky-actions {
+        padding:12px 18px 16px !important;
+      }
+    }
+
+
     /* Food Index report photo preview modal + compact photo button */
     .food-index-app .photo-view-btn {
       display:inline-flex;
@@ -1568,6 +1654,16 @@ function taskHasClosedOutstandingEvidence(task){
   })
 }
 
+function foodOutstandingIsClosed(row){
+  const key = cleanText(row?.status).toLowerCase().replace(/[\s_-]+/g, '')
+  return ['closed','close','approved','approve'].includes(key) || Boolean(row?.approved_at)
+}
+
+function foodTaskCloseCycleCompleted(task){
+  const outstandings = Array.isArray(task?.food_outstandings) ? task.food_outstandings : []
+  return outstandings.length > 0 && outstandings.every(foodOutstandingIsClosed)
+}
+
 function taskHasApprovedRelatedEvidence(task){
   return taskHasApprovedFindingEvidence(task) || taskHasClosedOutstandingEvidence(task)
 }
@@ -1882,14 +1978,17 @@ function FoodDashboard({ context }){
         setSites(visibleDashboardSites)
         if (siteFilter && !visibleDashboardSites.some(s => s.id === siteFilter)) setSiteFilter('')
       }
-      let monthStart = null
-      let monthEndDate = null
-      if (yearFilter !== 'ALL' && monthFilter !== 'ALL') {
-        monthStart = `${yearFilter}-${monthFilter}-01`
-        monthEndDate = new Date(Number(yearFilter), Number(monthFilter), 0).toISOString().slice(0,10)
+      let signaturePeriodStart = ''
+      let signaturePeriodEnd = ''
+      if (weekFilter !== 'ALL') {
+        signaturePeriodStart = String(weekFilter).slice(0,10)
+        signaturePeriodEnd = endOfWeekSunday(signaturePeriodStart)
+      } else if (yearFilter !== 'ALL' && monthFilter !== 'ALL') {
+        signaturePeriodStart = `${yearFilter}-${monthFilter}-01`
+        signaturePeriodEnd = new Date(Number(yearFilter), Number(monthFilter), 0).toISOString().slice(0,10)
       } else if (yearFilter !== 'ALL') {
-        monthStart = `${yearFilter}-01-01`
-        monthEndDate = `${yearFilter}-12-31`
+        signaturePeriodStart = `${yearFilter}-01-01`
+        signaturePeriodEnd = `${yearFilter}-12-31`
       }
       const [t, o, v, p, sigs] = await Promise.all([
         fetchAllRows('food_weekly_tasks', `
@@ -1918,7 +2017,11 @@ function FoodDashboard({ context }){
         fetchAllRows('food_parameters', 'id,status', q => q.order('id')),
         fetchAllRows('food_inspection_signatures', 'id, task_id, signer_user_id, site_id, signer_name, signer_nrp, signer_role, signed_at, food_weekly_tasks!inner(id, site_id, week_start_date, week_end_date, status, sites(site_code,site_name))', q => {
           q = q.order('signed_at', { ascending:false })
-          if (monthStart && monthEndDate) q = q.gte('food_weekly_tasks.week_start_date', monthStart).lte('food_weekly_tasks.week_start_date', monthEndDate)
+          // Gunakan overlap periode yang sama dengan task dashboard, bukan exact week_start_date.
+          if (signaturePeriodStart && signaturePeriodEnd) {
+            q = q.gte('food_weekly_tasks.week_end_date', signaturePeriodStart)
+              .lte('food_weekly_tasks.week_start_date', signaturePeriodEnd)
+          }
           if (!adminCanSeeAll(context)) q = q.eq('food_weekly_tasks.site_id', context.site_id)
           if (adminCanSeeAll(context) && siteFilter) q = q.eq('food_weekly_tasks.site_id', siteFilter)
           return q
@@ -1952,9 +2055,14 @@ function FoodDashboard({ context }){
 
   const filteredTasks = tasks.filter(t => foodTaskMatchesDashboardPeriod(t, yearFilter, monthFilter, weekFilter))
   const filteredOuts = outs.filter(o => outstandingMatchesDashboardPeriod(o, yearFilter, monthFilter, weekFilter))
-  const filteredSignatureRows = weekFilter === 'ALL' ? signatureRows : signatureRows.filter(sig => {
-    const task = sig.food_weekly_tasks || {}
-    return task.week_start_date === weekFilter
+  // V73 FIX:
+  // Partisipasi role harus memakai scope task yang persis sama dengan Score/Pelaksanaan.
+  // Sebelumnya signature difilter berdasarkan week_start_date exact, sedangkan task memakai
+  // overlap minggu. Akibatnya saat memilih week tertentu, score terisi tetapi partisipasi 0.
+  const filteredTaskIds = new Set(filteredTasks.map(t => String(t.id)))
+  const filteredSignatureRows = signatureRows.filter(sig => {
+    const taskId = sig.task_id || sig.food_weekly_tasks?.id
+    return taskId && filteredTaskIds.has(String(taskId))
   })
   const weekTasks = filteredTasks
   const total = weekTasks.length
@@ -2046,7 +2154,7 @@ function FoodDashboard({ context }){
     .map((s, idx) => {
       const siteSignatures = filteredSignatureRows.filter(sig => {
         const task = sig.food_weekly_tasks || {}
-        return task.site_id === s.id && foodTaskMatchesDashboardPeriod(task, yearFilter, monthFilter, weekFilter)
+        return task.site_id === s.id
       })
       const counts = {}
       Object.keys(FOOD_ROLE_TARGETS).forEach(role => { counts[role] = siteSignatures.filter(sig => normalizeRole(sig.signer_role) === role).length })
@@ -2955,6 +3063,7 @@ function FoodOutstanding({ context, profile }){
           *,
           food_findings(
             id,
+            answer_id,
             corrective_action,
             preventive_action,
             due_date,
@@ -3168,6 +3277,19 @@ function FoodApproval({ context, profile }){
   const [saving, setSaving] = useState(false)
 
   useEffect(() => { load() }, [context?.id])
+  useEffect(() => {
+    if (!active) return undefined
+    const previousOverflow = document.body.style.overflow
+    const closeOnEscape = event => {
+      if (event.key === 'Escape' && !saving) setActive(null)
+    }
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [active, saving])
 
   async function load(){
     setLoading(true); setError('')
@@ -3187,6 +3309,7 @@ function FoodApproval({ context, profile }){
           ),
           food_findings(
             id,
+            answer_id,
             corrective_action,
             preventive_action,
             due_date,
@@ -3197,19 +3320,29 @@ function FoodApproval({ context, profile }){
               evidence_photo_url,
               food_parameters(category, parameter_text, sort_order)
             )
-          )
+          ),
+          food_outstandings(id, status, approved_at, closed_at)
         `)
         .eq('status', 'Waiting Approval')
         .order('submitted_at', { ascending:true })
       if (!adminCanSeeAll(context)) q = q.eq('site_id', context.site_id)
       const { data, error } = await q
       if (error) throw error
-      setTasks(data || [])
+      const loadedTasks = data || []
+      const completedCloseTasks = loadedTasks.filter(foodTaskCloseCycleCompleted)
+      if (completedCloseTasks.length) {
+        const { error: syncError } = await supabase.from('food_weekly_tasks')
+          .update({ status:'Approved', updated_at:new Date().toISOString() })
+          .in('id', completedCloseTasks.map(t => t.id))
+        if (syncError) console.warn('Food Index task status sync failed:', syncError.message)
+      }
+      setTasks(loadedTasks.filter(t => !foodTaskCloseCycleCompleted(t) && foodTaskEffectiveStatus(t) === 'Waiting Approval'))
 
       let closeQ = supabase.from('food_outstandings')
         .select(`
           *,
           food_findings(
+            id,
             corrective_action,
             preventive_action,
             due_date,
@@ -3303,10 +3436,37 @@ function FoodApproval({ context, profile }){
     setSaving(true); setMsg(''); setError('')
     try {
       const now = new Date().toISOString()
+      const taskId = row.task_id || row.food_weekly_tasks?.id
+      const findingId = row.finding_id || row.food_findings?.id
       const { error } = await supabase.from('food_outstandings')
-        .update({ status:'Closed', approved_by:profile?.id, approved_at:now, updated_at:now })
+        .update({ status:'Closed', approved_by:profile?.id, approved_at:now, closed_at:now, updated_at:now })
         .eq('id', row.id)
       if (error) throw error
+
+      if (findingId) {
+        const { error: findingError } = await supabase.from('food_findings')
+          .update({ status:'Closed', updated_at:now })
+          .eq('id', findingId)
+        if (findingError) throw findingError
+      }
+
+      if (taskId) {
+        const { data: taskOutstandings, error: outstandingError } = await supabase.from('food_outstandings')
+          .select('id, status, approved_at, closed_at')
+          .eq('task_id', taskId)
+        if (outstandingError) throw outstandingError
+
+        if ((taskOutstandings || []).length && (taskOutstandings || []).every(foodOutstandingIsClosed)) {
+          const { data: syncedTask, error: taskError } = await supabase.from('food_weekly_tasks')
+            .update({ status:'Approved', updated_at:now })
+            .eq('id', taskId)
+            .select('id, status')
+            .maybeSingle()
+          if (taskError) throw taskError
+          if (!syncedTask) throw new Error('Close outstanding tersimpan, tetapi status task Food Index gagal disinkronkan.')
+        }
+      }
+
       setMsg('Close outstanding berhasil di-approve.')
       await load()
     } catch(e){ setError(e.message) }
@@ -3335,7 +3495,7 @@ function FoodApproval({ context, profile }){
     site: t.sites?.site_code || '-',
     vendor: t.food_vendors?.vendor_name || '-',
     minggu: `${t.week_start_date} s/d ${t.week_end_date}`,
-    status: t.status,
+    status: foodTaskEffectiveStatus(t),
     submitted_at: t.submitted_at?.slice(0,16)?.replace('T',' ') || '-',
     jumlah_temuan: (t.food_inspection_answers || []).filter(a => Number(a.score) === 0).length,
     action_plan_ready: isTaskReady(t) ? 'Siap Approval' : 'Belum Lengkap'
@@ -3359,7 +3519,7 @@ function FoodApproval({ context, profile }){
     <Panel title="Export Approval Queue" action={<button onClick={()=>downloadXlsx('food-index-approval-queue.xlsx', tableRows)}><Download size={16}/> Export</button>}>
       <Table rows={tableRows} empty="Tidak ada data approval." />
     </Panel>
-    {active && <div className="modal-backdrop food-modal-backdrop"><div className="modal-card wide-modal food-inspection-modal">
+    {active && <div className="modal-backdrop food-modal-backdrop approval-review-backdrop" role="dialog" aria-modal="true" onMouseDown={e=>{ if (e.target === e.currentTarget && !saving) setActive(null) }}><div className="modal-card wide-modal food-inspection-modal approval-review-modal" onMouseDown={e=>e.stopPropagation()}>
       <div className="modal-head food-modal-head">
         <div>
           <span className="modal-eyebrow">Approval Atasan Site</span>
@@ -3368,41 +3528,43 @@ function FoodApproval({ context, profile }){
         </div>
         <button className="icon close-btn" onClick={()=>setActive(null)} aria-label="Tutup modal"><X size={18}/></button>
       </div>
-      <div className="inspection-summary">
-        <div><small>Total Parameter</small><b>{answers.length}</b></div>
-        <div><small>Total Temuan</small><b>{findingCount}</b></div>
-        <div><small>Status</small><span>{isTaskReady(active) ? 'Siap di-approve' : 'Belum siap, action plan belum lengkap'}</span></div>
-      </div>
-      <div className="inspection-scroll">
-        {sortedAnswers.map((a, idx) => {
-          const finding = (active.food_findings || []).find(f => f.answer_id === a.id)
-          const isFinding = Number(a.score) === 0
-          return <div key={a.id} className={`inspection-item ${isFinding ? 'finding approval-review-finding' : 'passed'}`}>
-            <div className="inspection-param">
-              <span className="param-index">{idx + 1}</span>
-              <div><small>{a.food_parameters?.category || 'General'}</small><strong>{a.food_parameters?.parameter_text || '-'}</strong></div>
+      <div className="approval-review-body">
+        <div className="inspection-summary">
+          <div><small>Total Parameter</small><b>{answers.length}</b></div>
+          <div><small>Total Temuan</small><b>{findingCount}</b></div>
+          <div><small>Status</small><span>{isTaskReady(active) ? 'Siap di-approve' : 'Belum siap, action plan belum lengkap'}</span></div>
+        </div>
+        <div className="inspection-scroll">
+          {sortedAnswers.map((a, idx) => {
+            const finding = (active.food_findings || []).find(f => f.answer_id === a.id)
+            const isFinding = Number(a.score) === 0
+            return <div key={a.id} className={`inspection-item ${isFinding ? 'finding approval-review-finding' : 'passed'}`}>
+              <div className="inspection-param">
+                <span className="param-index">{idx + 1}</span>
+                <div><small>{a.food_parameters?.category || 'General'}</small><strong>{a.food_parameters?.parameter_text || '-'}</strong></div>
+              </div>
+              <div className="approval-detail-grid">
+                <div><small>Nilai</small><b>{Number(a.score) === 1 ? '1 - Sesuai' : '0 - Temuan'}</b></div>
+                <div><small>Catatan Temuan</small><span>{a.finding_note || '-'}</span></div>
+                <div><small>Evidence</small>{a.evidence_photo_url ? <a href={a.evidence_photo_url} target="_blank" rel="noreferrer">Lihat foto</a> : <span>-</span>}</div>
+                <div><small>Corrective Action</small><span>{finding?.corrective_action || '-'}</span></div>
+                <div><small>Preventive Action</small><span>{finding?.preventive_action || '-'}</span></div>
+                <div><small>Due Date</small><span>{finding?.due_date || '-'}</span></div>
             </div>
-            <div className="approval-detail-grid">
-              <div><small>Nilai</small><b>{Number(a.score) === 1 ? '1 - Sesuai' : '0 - Temuan'}</b></div>
-              <div><small>Catatan Temuan</small><span>{a.finding_note || '-'}</span></div>
-              <div><small>Evidence</small>{a.evidence_photo_url ? <a href={a.evidence_photo_url} target="_blank" rel="noreferrer">Lihat foto</a> : <span>-</span>}</div>
-              <div><small>Corrective Action</small><span>{finding?.corrective_action || '-'}</span></div>
-              <div><small>Preventive Action</small><span>{finding?.preventive_action || '-'}</span></div>
-              <div><small>Due Date</small><span>{finding?.due_date || '-'}</span></div>
             </div>
-          </div>
-        })}
-        <section className="approval-signature-box">
-          <div className="signature-section-head"><div><h4>Tanda Tangan Petugas / Peserta Inspeksi</h4><p>Daftar petugas yang menandatangani hasil inspeksi sebelum submit.</p></div><StatusPill value={`${(active.food_inspection_signatures || []).length} TTD`} /></div>
-          <div className="signature-list">
-            {(active.food_inspection_signatures || []).map(sig => <div className="signature-list-item" key={sig.id}>
-              <div><b>{sig.signer_name}</b><span>{sig.signer_nrp || '-'} · {sig.signer_role || '-'} · {sig.signer_company || '-'}</span></div>
-              {sig.signature_url ? <a href={sig.signature_url} target="_blank" rel="noreferrer">Lihat TTD</a> : <span>-</span>}
-            </div>)}
-            {!(active.food_inspection_signatures || []).length && <div className="no-evidence-note">Belum ada tanda tangan tersimpan pada inspeksi ini.</div>}
-          </div>
-        </section>
-        <label className="field-block"><span>Catatan Reject</span><textarea rows={3} placeholder="Isi jika approval ditolak" value={rejectNote} onChange={e=>setRejectNote(e.target.value)} /></label>
+          })}
+          <section className="approval-signature-box">
+            <div className="signature-section-head"><div><h4>Tanda Tangan Petugas / Peserta Inspeksi</h4><p>Daftar petugas yang menandatangani hasil inspeksi sebelum submit.</p></div><StatusPill value={`${(active.food_inspection_signatures || []).length} TTD`} /></div>
+            <div className="signature-list">
+              {(active.food_inspection_signatures || []).map(sig => <div className="signature-list-item" key={sig.id}>
+                <div><b>{sig.signer_name}</b><span>{sig.signer_nrp || '-'} · {sig.signer_role || '-'} · {sig.signer_company || '-'}</span></div>
+                {sig.signature_url ? <a href={sig.signature_url} target="_blank" rel="noreferrer">Lihat TTD</a> : <span>-</span>}
+              </div>)}
+              {!(active.food_inspection_signatures || []).length && <div className="no-evidence-note">Belum ada tanda tangan tersimpan pada inspeksi ini.</div>}
+            </div>
+          </section>
+          <label className="field-block"><span>Catatan Reject</span><textarea rows={3} placeholder="Isi jika approval ditolak" value={rejectNote} onChange={e=>setRejectNote(e.target.value)} /></label>
+        </div>
       </div>
       <div className="modal-actions sticky-actions">
         <button className="secondary" onClick={()=>setActive(null)} disabled={saving}>Tutup</button>
