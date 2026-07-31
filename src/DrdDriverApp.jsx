@@ -84,6 +84,26 @@ function normEmail(v){ return clean(v).toLowerCase() }
 function isValidEmail(v){ const e = normEmail(v); return !e || /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/.test(e) }
 function today(){ return new Date().toISOString().slice(0,10) }
 function months(n){ const d = new Date(); d.setMonth(d.getMonth()+n); return d.toISOString().slice(0,10) }
+function dateOnly(value){ return value ? String(value).slice(0,10) : '' }
+function addMonthsIso(baseDate, count){
+  const iso = excelDateToIso(baseDate)
+  if(!iso) return ''
+  const [y,m,d] = iso.split('-').map(Number)
+  const targetMonth = (m - 1) + Number(count || 0)
+  const targetYear = y + Math.floor(targetMonth / 12)
+  const normalizedMonth = ((targetMonth % 12) + 12) % 12
+  const lastDay = new Date(Date.UTC(targetYear, normalizedMonth + 1, 0)).getUTCDate()
+  return datePartsToIso(targetYear, normalizedMonth + 1, Math.min(d, lastDay))
+}
+function drdValidUntil(attempt){
+  if(!attempt || attempt.status !== 'Lulus') return ''
+  return excelDateToIso(attempt.valid_until) || addMonthsIso(dateOnly(attempt.submitted_at || attempt.created_at), 6)
+}
+function isDrdCompletedAt(attempt, referenceDate=today()){
+  const validUntil = drdValidUntil(attempt)
+  const submittedDate = dateOnly(attempt?.submitted_at || attempt?.created_at)
+  return !!validUntil && (!submittedDate || submittedDate <= referenceDate) && validUntil >= referenceDate
+}
 
 function addDaysIso(baseDate, days){
   const iso = excelDateToIso(baseDate) || today()
@@ -337,11 +357,10 @@ function MultiSitePicker({ sites=[], value=[], onChange }){
   </div>
 }
 
-function DashboardDateFilter({ dateFrom, dateTo, setDateFrom, setDateTo, onClear, sites=[], siteFilter=[], setSiteFilter, showSiteFilter=false }) {
-  return <Panel title="Filter Dashboard" desc="Pilih tanggal dan site yang ingin ditampilkan.">
+function DashboardDateFilter({ referenceDate, setReferenceDate, onClear, sites=[], siteFilter=[], setSiteFilter, showSiteFilter=false }) {
+  return <Panel title="Filter Dashboard" desc="Pilih tanggal acuan status dan site. Dashboard menampilkan status lifecycle, bukan hanya transaksi pada tanggal tes.">
     <div className={showSiteFilter ? 'dashboard-filter-grid with-site' : 'dashboard-filter-grid'}>
-      <label>Dari Tanggal<input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} /></label>
-      <label>Sampai Tanggal<input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} /></label>
+      <label>Tanggal Acuan<input type="date" value={referenceDate} onChange={e=>setReferenceDate(e.target.value || today())} /></label>
       {showSiteFilter&&<MultiSitePicker sites={sites} value={siteFilter} onChange={setSiteFilter}/>}
       <button type="button" className="secondary reset-filter-btn" onClick={onClear}>Reset Filter</button>
     </div>
@@ -358,16 +377,18 @@ function isVisibleDashboardPeriod(row){ return !isHiddenDashboardSiteCode(row?.d
 
 function Dashboard({work}){
   const [drivers,setDrivers]=useState([]), [attempts,setAttempts]=useState([]), [periods,setPeriods]=useState([]), [sites,setSites]=useState([])
-  const [dateFrom,setDateFrom]=useState(''), [dateTo,setDateTo]=useState(''), [siteFilter,setSiteFilter]=useState([])
+  const [referenceDate,setReferenceDate]=useState(today()), [siteFilter,setSiteFilter]=useState([])
   const siteFilterKey = Array.isArray(siteFilter) ? siteFilter.join('|') : String(siteFilter || '')
-  useEffect(()=>{load()},[work.id,dateFrom,dateTo,siteFilterKey])
+  useEffect(()=>{load()},[work.id,siteFilterKey])
   async function load(){
     const admin=isAdmin(work)
     const selectedSiteIds = Array.isArray(siteFilter) ? siteFilter.filter(Boolean) : (siteFilter ? [siteFilter] : [])
     const matchSelectedSite = siteId => !selectedSiteIds.length || selectedSiteIds.some(id => String(id) === String(siteId))
     const buildDrivers=()=>{ let q=supabase.from('drivers').select('*,sites(site_code,site_name),vendors(vendor_name)').eq('status','Aktif').order('created_at',{ascending:false}); if(admin&&selectedSiteIds.length) q=q.in('site_id',selectedSiteIds); if(!admin) q=q.eq('site_id',work.site_id); return q }
-    const buildAttempts=()=>{ let q=supabase.from('drd_attempts').select('*,drivers(site_id,nama_driver,nrp_driver,email,sites(site_code,site_name))').order('created_at',{ascending:false}); if(dateFrom) q=q.gte('created_at',dateFrom); if(dateTo) q=q.lte('created_at',dateTo+'T23:59:59'); return q }
-    const buildPeriods=()=>{ let q=supabase.from('drd_induction_periods').select('*,drivers(nama_driver,nrp_driver,site_id,sites(site_code,site_name))').order('created_at',{ascending:false}); if(dateFrom) q=q.gte('created_at',dateFrom); if(dateTo) q=q.lte('created_at',dateTo+'T23:59:59'); return q }
+    // Status DRD dan Induksi adalah lifecycle. Seluruh histori tetap diambil agar
+    // completion tidak hilang hanya karena tes/periode dibuat sebelum filter tanggal.
+    const buildAttempts=()=>supabase.from('drd_attempts').select('*,drivers(site_id,nama_driver,nrp_driver,email,sites(site_code,site_name))').order('created_at',{ascending:false})
+    const buildPeriods=()=>supabase.from('drd_induction_periods').select('*,drivers(nama_driver,nrp_driver,site_id,sites(site_code,site_name))').order('created_at',{ascending:false})
     const [d,a,p,s]=await Promise.all([
       fetchAllPages(buildDrivers),
       fetchAllPages(buildAttempts),
@@ -383,101 +404,134 @@ function Dashboard({work}){
       .filter(isVisibleDashboardPeriod)
     setDrivers(visibleDrivers); setAttempts(scopedAttempts); setPeriods(scopedPeriods); if(admin) setSites((s||[]).filter(isVisibleDashboardSite))
   }
-  const latestDrd=new Map()
-  attempts.filter(a=>(a.test_type||'DRD')==='DRD').forEach(a=>{ if(!latestDrd.has(a.driver_id)) latestDrd.set(a.driver_id,a) })
-  function currentInductionPeriod(d){
-    const current = periods.find(p=>String(p.driver_id)===String(d.id) && String(p.masa_dinas_end_date||'')===String(d.end_masa_dinas||''))
-      || periods.find(p=>String(p.driver_id)===String(d.id) && !p.masa_dinas_end_date)
-    if(current) return current
-    // Setelah induksi closed, end_masa_dinas driver diperpanjang 70 hari.
-    // Pada kondisi itu periode closed lama tetap ditampilkan sebagai histori aktif dashboard,
-    // tetapi tidak dipakai lagi ketika masa dinas baru sudah habis dan butuh periode baru.
-    if(!isExpired(d.end_masa_dinas)) return periods.find(p=>String(p.driver_id)===String(d.id)) || null
-    return null
+
+  const attemptsAtReference=attempts.filter(a=>{
+    const submitted=dateOnly(a.submitted_at || a.created_at)
+    return !submitted || submitted<=referenceDate
+  })
+  const latestDrdAttempt=new Map()
+  const latestPassedDrd=new Map()
+  attemptsAtReference.filter(a=>(a.test_type||'DRD')==='DRD').forEach(a=>{
+    if(!latestDrdAttempt.has(a.driver_id)) latestDrdAttempt.set(a.driver_id,a)
+    if(a.status==='Lulus' && !latestPassedDrd.has(a.driver_id)) latestPassedDrd.set(a.driver_id,a)
+  })
+  const periodsByDriver=new Map()
+  periods.forEach(p=>{
+    const key=String(p.driver_id)
+    if(!periodsByDriver.has(key)) periodsByDriver.set(key,[])
+    periodsByDriver.get(key).push(p)
+  })
+  function currentCyclePeriod(d){
+    const rows=(periodsByDriver.get(String(d.id)) || []).filter(p=>{
+      const created=dateOnly(p.created_at)
+      return !created || created<=referenceDate
+    })
+    return rows.find(p=>String(p.masa_dinas_end_date||'')===String(d.end_masa_dinas||''))
+      || rows.find(p=>!p.masa_dinas_end_date && p.status!=='Closed')
+      || null
   }
-  const drdOk=drivers.filter(d=>{ const a=latestDrd.get(d.id); return a?.status==='Lulus' && (!a.valid_until || a.valid_until>=today()) }).length
+  function latestClosedPeriodAt(d){
+    const rows=periodsByDriver.get(String(d.id)) || []
+    return rows.find(p=>p.status==='Closed' && dateOnly(p.completed_at || p.updated_at || p.created_at)<=referenceDate) || null
+  }
+  function inductionState(d){
+    const currentPeriod=currentCyclePeriod(d)
+    const closedPeriod=latestClosedPeriodAt(d)
+    const endMasaDinas=excelDateToIso(d.end_masa_dinas)
+    const expired=!!endMasaDinas && endMasaDinas<referenceDate
+
+    // Setelah induksi lulus, driver tetap Completed selama masa dinas aktif.
+    // Begitu end_masa_dinas terlewati, status kembali Open untuk siklus berikutnya.
+    if(closedPeriod && endMasaDinas && !expired){
+      return {completed:true,open:false,currentPeriod:currentPeriod||closedPeriod,closedPeriod,status:'Completed - Masa Dinas Aktif',expired:false}
+    }
+    if(expired){
+      if(!currentPeriod) return {completed:false,open:true,currentPeriod:null,closedPeriod,status:'Open - Butuh Input Periode',expired:true}
+      const onsite=excelDateToIso(currentPeriod.onsite_date)
+      if(!onsite || onsite>referenceDate) return {completed:false,open:true,currentPeriod,closedPeriod,status:'Open - Menunggu Onsite',expired:true}
+      return {completed:false,open:true,currentPeriod,closedPeriod,status:'Open - Wajib Induksi',expired:true}
+    }
+    return {completed:false,open:false,currentPeriod,closedPeriod,status:endMasaDinas?'Belum Wajib':'End Masa Dinas Belum Diisi',expired:false}
+  }
+
+  const drdOk=drivers.filter(d=>isDrdCompletedAt(latestPassedDrd.get(d.id),referenceDate)).length
   const total=drivers.length, drdBelum=total-drdOk, drdAch=total?Math.round(drdOk/total*100):0
-  const expiredDrivers=drivers.filter(d=>isExpired(d.end_masa_dinas))
-  const duePeriods=drivers.map(currentInductionPeriod).filter(Boolean).filter(isOnsiteDue)
-  const closedInduksi=drivers.filter(d=>currentInductionPeriod(d)?.status==='Closed').length
-  const openPeriodInput=expiredDrivers.filter(d=>!currentInductionPeriod(d)).length
-  const openInduksi=duePeriods.length
-  // Achievement induksi berbasis masa dinas driver aktif saat ini per site.
-  // Driver yang masa dinasnya habis tetapi belum diinput periode tetap masuk denominator agar ACH tidak terlihat 100% palsu.
-  const inductionTarget=Math.max(expiredDrivers.length, openInduksi+closedInduksi+openPeriodInput)
-  const inductionAch=inductionTarget?Math.round(closedInduksi/inductionTarget*100):100
+  const inductionStates=drivers.map(d=>({driver:d,...inductionState(d)}))
+  const completedInduksi=inductionStates.filter(x=>x.completed).length
+  const openInduksi=inductionStates.filter(x=>x.open).length
+  const openPeriodInput=inductionStates.filter(x=>x.open&&!x.currentPeriod).length
+  const inductionTarget=completedInduksi+openInduksi
+  const inductionAch=inductionTarget?Math.round(completedInduksi/inductionTarget*100):100
+  const expiredDrivers=inductionStates.filter(x=>x.expired).map(x=>x.driver)
 
   const bySite={}
   const bySiteInduksi={}
   drivers.forEach(d=>{
     const code=d.sites?.site_code||'-'
     const siteName=d.sites?.site_name||'-'
-    bySite[code]??={site:code,total:0,drd_ok:0,drd_belum:0,achievement:0}
+    bySite[code]??={site:code,total:0,drd_completed:0,drd_open:0,achievement:0}
     bySite[code].total++
-    const a=latestDrd.get(d.id)
-    if(a?.status==='Lulus'&&(!a.valid_until||a.valid_until>=today())) bySite[code].drd_ok++
+    if(isDrdCompletedAt(latestPassedDrd.get(d.id),referenceDate)) bySite[code].drd_completed++
 
-    bySiteInduksi[code]??={site:code,site_name:siteName,total_driver:0,masa_dinas_habis:0,butuh_input_periode:0,wajib_induksi:0,open_induksi:0,closed_induksi:0,belum_selesai:0,achievement_induksi:100}
+    bySiteInduksi[code]??={site:code,site_name:siteName,total_driver:0,target_induksi:0,open_induksi:0,completed_induksi:0,butuh_input_periode:0,menunggu_onsite:0,wajib_induksi:0,achievement_induksi:100}
+    const state=inductionState(d)
     bySiteInduksi[code].total_driver++
-    const period=currentInductionPeriod(d)
-    const expired=isExpired(d.end_masa_dinas)
-    const due=period ? isOnsiteDue(period) : false
-    const closed=period?.status==='Closed'
-    if(expired) bySiteInduksi[code].masa_dinas_habis++
-    if(expired && !period) bySiteInduksi[code].butuh_input_periode++
-    if(closed || due){
-      bySiteInduksi[code].wajib_induksi++
-      if(due) bySiteInduksi[code].open_induksi++
-      if(closed) bySiteInduksi[code].closed_induksi++
+    if(state.completed){
+      bySiteInduksi[code].completed_induksi++
+      bySiteInduksi[code].target_induksi++
+    }
+    if(state.open){
+      bySiteInduksi[code].open_induksi++
+      bySiteInduksi[code].target_induksi++
+      if(!state.currentPeriod) bySiteInduksi[code].butuh_input_periode++
+      else if(!state.currentPeriod.onsite_date || state.currentPeriod.onsite_date>referenceDate) bySiteInduksi[code].menunggu_onsite++
+      else bySiteInduksi[code].wajib_induksi++
     }
   })
-  Object.values(bySite).forEach(x=>{ x.drd_belum=x.total-x.drd_ok; x.achievement=x.total?Math.round(x.drd_ok/x.total*100):0 })
-  Object.values(bySiteInduksi).forEach(x=>{
-    const target=Math.max(x.masa_dinas_habis, x.wajib_induksi + x.butuh_input_periode)
-    x.target_induksi=target
-    x.belum_selesai=Math.max(target-x.closed_induksi,0)
-    x.achievement_induksi=target?Math.round(x.closed_induksi/target*100):100
-  })
+  Object.values(bySite).forEach(x=>{ x.drd_open=x.total-x.drd_completed; x.achievement=x.total?Math.round(x.drd_completed/x.total*100):0 })
+  Object.values(bySiteInduksi).forEach(x=>{ x.achievement_induksi=x.target_induksi?Math.round(x.completed_induksi/x.target_induksi*100):100 })
   const sortBySiteCode=(a,b)=>String(a.site || '').localeCompare(String(b.site || ''), 'id', { numeric:true, sensitivity:'base' })
   const siteRows=Object.values(bySite).sort(sortBySiteCode)
   const inductionSiteRows=Object.values(bySiteInduksi).sort(sortBySiteCode)
-  const driverDrdRows=drivers.map(d=>{ const a=latestDrd.get(d.id); const valid=a?.status==='Lulus' && (!a.valid_until || a.valid_until>=today()); return {site:d.sites?.site_code||'-', nama_driver:d.nama_driver, nrp_driver:d.nrp_driver, email:d.email||'-', vendor:d.vendors?.vendor_name||'-', status_drd:valid?'Sudah DRD':'Belum DRD', nilai:a?.score ?? '-', tanggal_test:a?.submitted_at ? String(a.submitted_at).slice(0,10) : '-', valid_until:a?.valid_until||'-'} })
-  const sudahDrdRows=driverDrdRows.filter(r=>r.status_drd==='Sudah DRD').sort((a,b)=>String(a.site).localeCompare(String(b.site))||String(a.nama_driver).localeCompare(String(b.nama_driver)))
-  const belumDrdRows=driverDrdRows.filter(r=>r.status_drd==='Belum DRD').sort((a,b)=>String(a.site).localeCompare(String(b.site))||String(a.nama_driver).localeCompare(String(b.nama_driver)))
-  const inductionRows=drivers.map(d=>{
-    const p=currentInductionPeriod(d)
-    const expired=isExpired(d.end_masa_dinas)
-    const due=p ? isOnsiteDue(p) : false
-    const status=p?.status==='Closed' ? 'Closed' : !expired ? 'Belum Wajib' : !p ? 'Butuh Input Periode' : due ? 'Open - Wajib Induksi' : 'Menunggu Onsite'
-    return {
-      site:d.sites?.site_code||'-',
-      nama_driver:d.nama_driver,
-      nrp_driver:d.nrp_driver,
-      end_masa_dinas:d.end_masa_dinas||'-',
-      cuti_mulai:p?.cuti_start_date||'-',
-      onsite:p?.onsite_date||'-',
-      status_induksi:status,
-      status_periode:p?.status||'-',
-      completed_at:p?.completed_at ? String(p.completed_at).slice(0,10) : '-'
-    }
-  }).sort((a,b)=>String(a.site).localeCompare(String(b.site))||String(a.status_induksi).localeCompare(String(b.status_induksi))||String(a.nama_driver).localeCompare(String(b.nama_driver)))
+  const driverDrdRows=drivers.map(d=>{
+    const latest=latestDrdAttempt.get(d.id)
+    const passed=latestPassedDrd.get(d.id)
+    const valid=isDrdCompletedAt(passed,referenceDate)
+    const validUntil=drdValidUntil(passed)
+    return {site:d.sites?.site_code||'-',nama_driver:d.nama_driver,nrp_driver:d.nrp_driver,email:d.email||'-',vendor:d.vendors?.vendor_name||'-',status_drd:valid?'Completed':'Open',nilai:latest?.score??'-',tanggal_test:latest?.submitted_at?dateOnly(latest.submitted_at):'-',valid_until:validUntil||'-',tanggal_acuan:referenceDate}
+  })
+  const sudahDrdRows=driverDrdRows.filter(r=>r.status_drd==='Completed').sort((a,b)=>String(a.site).localeCompare(String(b.site))||String(a.nama_driver).localeCompare(String(b.nama_driver)))
+  const belumDrdRows=driverDrdRows.filter(r=>r.status_drd==='Open').sort((a,b)=>String(a.site).localeCompare(String(b.site))||String(a.nama_driver).localeCompare(String(b.nama_driver)))
+  const inductionRows=inductionStates.map(({driver:d,...state})=>({
+    site:d.sites?.site_code||'-',
+    nama_driver:d.nama_driver,
+    nrp_driver:d.nrp_driver,
+    end_masa_dinas:d.end_masa_dinas||'-',
+    cuti_mulai:state.currentPeriod?.cuti_start_date||'-',
+    onsite:state.currentPeriod?.onsite_date||'-',
+    status_induksi:state.status,
+    status_periode:state.currentPeriod?.status||'-',
+    completed_at:state.closedPeriod?.completed_at?dateOnly(state.closedPeriod.completed_at):'-',
+    tanggal_acuan:referenceDate
+  })).sort((a,b)=>String(a.site).localeCompare(String(b.site))||String(a.status_induksi).localeCompare(String(b.status_induksi))||String(a.nama_driver).localeCompare(String(b.nama_driver)))
   const detailDriverRows=[...driverDrdRows].sort((a,b)=>String(a.site).localeCompare(String(b.site))||String(a.nama_driver).localeCompare(String(b.nama_driver)))
   const detailDriverFileName=`detail-driver-dashboard-drd-${selectedSiteLabel(siteFilter, sites)}.xlsx`
   const inductionDetailFileName=`detail-induksi-driver-${selectedSiteLabel(siteFilter, sites)}.xlsx`
   return <div className="stack">
-    <DashboardDateFilter dateFrom={dateFrom} dateTo={dateTo} setDateFrom={setDateFrom} setDateTo={setDateTo} sites={sites} siteFilter={siteFilter} setSiteFilter={setSiteFilter} showSiteFilter={isAdmin(work)} onClear={()=>{setDateFrom('');setDateTo('');setSiteFilter([])}}/>
-    <div className="kpi-grid"><Kpi title="Total Driver" value={total} icon={<Truck/>}/><Kpi title="Sudah DRD" value={drdOk} icon={<CheckCircle2/>}/><Kpi title="Belum DRD" value={drdBelum} icon={<AlertTriangle/>}/><Kpi title="Achievement DRD" value={`${drdAch}%`} icon={<BarChart3/>}/><Kpi title="Open Induksi" value={openInduksi} icon={<Video/>}/><Kpi title="Induksi Closed" value={closedInduksi} icon={<ShieldCheck/>}/><Kpi title="Achievement Induksi" value={`${inductionAch}%`} icon={<Award/>}/><Kpi title="Masa Dinas Habis" value={expiredDrivers.length} icon={<CalendarCheck/>}/></div>
-    <Panel title="Dashboard DRD per Site" desc="Pencapaian DRD dihitung dari driver aktif yang sudah lulus dan belum expired." action={<div className="row-actions"><button onClick={()=>exportXlsx('achievement-drd-site.xlsx',siteRows)}><Download size={16}/> Export Summary</button><button className="secondary" onClick={()=>exportXlsx(detailDriverFileName,detailDriverRows)}><Download size={16}/> Export Detail Driver</button></div>}>
-      <div className="site-chart">{siteRows.map(r=><div className="site-bar" key={r.site}><div className="site-meta"><b>{r.site}</b><span>{r.drd_ok}/{r.total} · {r.achievement}%</span></div><div className="bar"><span style={{width:`${Math.min(r.achievement,100)}%`}}/></div></div>)}</div><ScrollTable rows={siteRows} height={320}/>
+    <DashboardDateFilter referenceDate={referenceDate} setReferenceDate={setReferenceDate} sites={sites} siteFilter={siteFilter} setSiteFilter={setSiteFilter} showSiteFilter={isAdmin(work)} onClear={()=>{setReferenceDate(today());setSiteFilter([])}}/>
+    <div className="summary-strip"><span><b>{referenceDate}</b> Tanggal Acuan Status</span><span>DRD tetap Completed sampai valid_until berakhir.</span><span>Induksi tetap Completed sampai end_masa_dinas berakhir.</span></div>
+    <div className="kpi-grid"><Kpi title="Total Driver" value={total} icon={<Truck/>}/><Kpi title="DRD Completed" value={drdOk} icon={<CheckCircle2/>}/><Kpi title="DRD Open" value={drdBelum} icon={<AlertTriangle/>}/><Kpi title="Achievement DRD" value={`${drdAch}%`} icon={<BarChart3/>}/><Kpi title="Induksi Open" value={openInduksi} icon={<Video/>}/><Kpi title="Induksi Completed" value={completedInduksi} icon={<ShieldCheck/>}/><Kpi title="Achievement Induksi" value={`${inductionAch}%`} icon={<Award/>}/><Kpi title="Masa Dinas Habis" value={expiredDrivers.length} icon={<CalendarCheck/>}/></div>
+    <Panel title="Dashboard DRD per Site" desc="Status dihitung pada tanggal acuan. Driver tetap Completed selama DRD lulus masih berada dalam masa berlaku enam bulan, walaupun tanggal tes berada di luar rentang filter." action={<div className="row-actions"><button onClick={()=>exportXlsx('achievement-drd-site.xlsx',siteRows)}><Download size={16}/> Export Summary</button><button className="secondary" onClick={()=>exportXlsx(detailDriverFileName,detailDriverRows)}><Download size={16}/> Export Detail Driver</button></div>}>
+      <div className="site-chart">{siteRows.map(r=><div className="site-bar" key={r.site}><div className="site-meta"><b>{r.site}</b><span>{r.drd_completed}/{r.total} · {r.achievement}%</span></div><div className="bar"><span style={{width:`${Math.min(r.achievement,100)}%`}}/></div></div>)}</div><ScrollTable rows={siteRows} height={320}/>
     </Panel>
-    <Panel title="Dashboard Induksi Driver ACH per Site" desc="Achievement induksi dihitung per site dari driver aktif yang masa dinasnya habis, open induksi, closed induksi, dan driver yang masih butuh input periode cuti." action={<div className="row-actions"><button onClick={()=>exportXlsx('achievement-induksi-driver-persite.xlsx',inductionSiteRows)}><Download size={16}/> Export Summary</button><button className="secondary" onClick={()=>exportXlsx(inductionDetailFileName,inductionRows)}><Download size={16}/> Export Detail Driver</button></div>}>
-      <div className="site-chart">{inductionSiteRows.map(r=><div className="site-bar" key={r.site}><div className="site-meta"><b>{r.site}</b><span>{r.closed_induksi}/{r.target_induksi} · {r.achievement_induksi}%</span></div><div className="bar"><span style={{width:`${Math.min(r.achievement_induksi,100)}%`}}/></div></div>)}</div>
+    <Panel title="Dashboard Induksi Driver ACH per Site" desc="Induksi yang sudah selesai tetap Completed selama masa dinas driver masih aktif. Saat end masa dinas terlewati, driver otomatis kembali dihitung Open untuk siklus induksi berikutnya." action={<div className="row-actions"><button onClick={()=>exportXlsx('achievement-induksi-driver-persite.xlsx',inductionSiteRows)}><Download size={16}/> Export Summary</button><button className="secondary" onClick={()=>exportXlsx(inductionDetailFileName,inductionRows)}><Download size={16}/> Export Detail Driver</button></div>}>
+      <div className="site-chart">{inductionSiteRows.map(r=><div className="site-bar" key={r.site}><div className="site-meta"><b>{r.site}</b><span>{r.completed_induksi}/{r.target_induksi} · {r.achievement_induksi}%</span></div><div className="bar"><span style={{width:`${Math.min(r.achievement_induksi,100)}%`}}/></div></div>)}</div>
       <ScrollTable rows={inductionSiteRows} height={340}/>
     </Panel>
-    <Panel title="Detail Driver Dashboard DRD" desc="Detail seluruh driver aktif yang menjadi denominator dashboard. Jika filter site BRCB dipilih, jumlah row export harus sama dengan total dashboard BRCB." action={<button onClick={()=>exportXlsx(detailDriverFileName,detailDriverRows)}><Download size={16}/> Export Detail Driver</button>}><ScrollTable rows={detailDriverRows} height={420}/></Panel>
-    <Panel title="Driver Sudah DRD" desc="Driver aktif yang sudah lulus DRD dan valid_until belum expired." action={<button onClick={()=>exportXlsx('driver-sudah-drd.xlsx',sudahDrdRows)}><Download size={16}/> Export</button>}><ScrollTable rows={sudahDrdRows} height={360}/></Panel>
-    <Panel title="Driver Belum DRD" desc="Driver aktif yang belum pernah lulus DRD atau masa berlaku DRD-nya sudah expired." action={<button onClick={()=>exportXlsx('driver-belum-drd.xlsx',belumDrdRows)}><Download size={16}/> Export</button>}><ScrollTable rows={belumDrdRows} height={420}/></Panel>
-    <Panel title="Detail Dashboard Induksi Driver" desc="Status induksi driver per nama: belum wajib, butuh input periode, menunggu onsite, open wajib induksi, atau closed." action={<button onClick={()=>exportXlsx(inductionDetailFileName,inductionRows)}><Download size={16}/> Export</button>}><div className="summary-strip"><span><b>{inductionTarget}</b> Target Induksi</span><span><b>{openPeriodInput}</b> Butuh Input Periode</span><span><b>{openInduksi}</b> Open Induksi</span><span><b>{closedInduksi}</b> Closed</span><span><b>{inductionAch}%</b> Achievement</span></div><ScrollTable rows={inductionRows} height={420}/></Panel>
+    <Panel title="Detail Driver Dashboard DRD" desc="Status setiap driver pada tanggal acuan berdasarkan kelulusan terakhir yang masih valid." action={<button onClick={()=>exportXlsx(detailDriverFileName,detailDriverRows)}><Download size={16}/> Export Detail Driver</button>}><ScrollTable rows={detailDriverRows} height={420}/></Panel>
+    <Panel title="Driver DRD Completed" desc="Driver aktif yang sudah lulus DRD dan masa berlaku enam bulannya belum berakhir." action={<button onClick={()=>exportXlsx('driver-drd-completed.xlsx',sudahDrdRows)}><Download size={16}/> Export</button>}><ScrollTable rows={sudahDrdRows} height={360}/></Panel>
+    <Panel title="Driver DRD Open" desc="Driver yang belum lulus DRD atau masa berlaku DRD-nya sudah berakhir pada tanggal acuan." action={<button onClick={()=>exportXlsx('driver-drd-open.xlsx',belumDrdRows)}><Download size={16}/> Export</button>}><ScrollTable rows={belumDrdRows} height={420}/></Panel>
+    <Panel title="Detail Dashboard Induksi Driver" desc="Completed dipertahankan sampai end masa dinas. Setelah lewat, status kembali Open: butuh input periode, menunggu onsite, atau wajib induksi." action={<button onClick={()=>exportXlsx(inductionDetailFileName,inductionRows)}><Download size={16}/> Export</button>}><div className="summary-strip"><span><b>{inductionTarget}</b> Target Induksi</span><span><b>{openPeriodInput}</b> Butuh Input Periode</span><span><b>{openInduksi}</b> Open</span><span><b>{completedInduksi}</b> Completed</span><span><b>{inductionAch}%</b> Achievement</span></div><ScrollTable rows={inductionRows} height={420}/></Panel>
   </div>
 }
 function Kpi({title,value,icon}){ return <div className="kpi"><div><span>{title}</span><strong>{value}</strong></div><div className="kpi-icon">{icon}</div></div> }
@@ -1033,10 +1087,10 @@ function DriverExam({profile,type}){
   async function load(){
     const {data:d}=await supabase.from('drivers').select('*').eq('email',profile.email).maybeSingle(); setDriver(d)
     if(!d)return
-    const {data:a}=await supabase.from('drd_attempts').select('*').eq('driver_id',d.id).eq('test_type','DRD').order('created_at',{ascending:false}).limit(1); setLatestDrd(a?.[0]||null)
+    const {data:a}=await supabase.from('drd_attempts').select('*').eq('driver_id',d.id).eq('test_type','DRD').eq('status','Lulus').order('created_at',{ascending:false}).limit(1); setLatestDrd(a?.[0]||null)
     if(type==='Induksi Driver'){ const {data:v}=await supabase.from('drd_induction_videos').select('*').eq('status','Aktif').order('created_at',{ascending:false}).limit(1); setVideo(v?.[0]||null); const {data:p}=await supabase.from('drd_induction_periods').select('*').eq('driver_id',d.id).eq('status','Open').lte('onsite_date',today()).order('onsite_date',{ascending:false}).limit(1); setPeriod(p?.[0]||null) }
   }
-  const drdValid=latestDrd?.status==='Lulus' && (!latestDrd.valid_until || latestDrd.valid_until>=today())
+  const drdValid=isDrdCompletedAt(latestDrd,today())
   const canShow = type==='DRD' ? !drdValid : !!period
   async function start(){ if(type==='Induksi Driver' && !videoDone) return setMsg('Tonton video induksi sampai selesai terlebih dahulu.'); const {data:q,error}=await supabase.from('drd_questions').select('*').eq('category',type).eq('status','Aktif').order('created_at'); if(error)return setMsg(error.message); if(!q?.length)return setMsg(`Bank soal kategori ${type} masih kosong.`); setQuestions(q); setActive(true); setAnswers({}); setIdx(0); setMsg(''); setReview(null) }
   async function submit(){

@@ -512,67 +512,127 @@ function SidakPage({ page, context, profile }) {
 }
 
 
-function DashboardDateFilter({ dateFrom, dateTo, setDateFrom, setDateTo, onClear, sites = [], siteFilter, setSiteFilter, globalView }) {
-  return <Panel title="Filter Dashboard" desc="Pilih tanggal dan site.">
-    <div className="form-grid sf-filter-grid">
+
+function MultiSitePicker({ sites = [], value = [], onChange }){
+  const selectedIds = Array.isArray(value) ? value.map(String) : (value ? [String(value)] : [])
+  const [open, setOpen] = useState(false)
+  const [q, setQ] = useState('')
+  const selectedSites = sites.filter(site => selectedIds.includes(String(site.id)))
+  const selectedSet = new Set(selectedIds)
+  const search = q.trim().toLowerCase()
+  const filteredSites = sites.filter(site => {
+    if (!search) return true
+    return `${site.site_code || ''} ${site.site_name || ''}`.toLowerCase().includes(search)
+  })
+
+  function toggle(id){
+    const siteId = String(id)
+    const next = selectedSet.has(siteId)
+      ? selectedIds.filter(item => item !== siteId)
+      : [...selectedIds, siteId]
+    onChange(next)
+  }
+
+  return <div className={open ? 'multi-site-picker open' : 'multi-site-picker'}>
+    <div className="multi-site-label-row">
+      <span>Site</span>
+      <small>Bisa pilih lebih dari satu</small>
+    </div>
+    <button type="button" className="multi-site-trigger" onClick={() => setOpen(!open)}>
+      <div className="multi-site-trigger-copy">
+        {selectedSites.length ? <div className="multi-site-chips">
+          {selectedSites.slice(0, 5).map(site => <span key={site.id}>{site.site_code}</span>)}
+          {selectedSites.length > 5 && <span>+{selectedSites.length - 5}</span>}
+        </div> : <b>Semua site aktif</b>}
+        <small>{selectedSites.length ? `${selectedSites.length} site dipilih` : 'Kosong berarti semua site ditampilkan'}</small>
+      </div>
+      <span className={open ? 'multi-site-arrow open' : 'multi-site-arrow'}>⌄</span>
+    </button>
+    {open && <div className="multi-site-dropdown">
+      <div className="multi-site-tools">
+        <div className="multi-site-search"><Search size={16}/><input value={q} onChange={e => setQ(e.target.value)} placeholder="Cari site..." /></div>
+        <div className="multi-site-tool-buttons">
+          <button type="button" className="secondary small" onClick={() => onChange(sites.map(site => String(site.id)))}>Pilih Semua</button>
+          <button type="button" className="secondary small" onClick={() => onChange([])}>Kosongkan</button>
+        </div>
+      </div>
+      <div className="multi-site-options">
+        {filteredSites.length ? filteredSites.map(site => {
+          const checked = selectedSet.has(String(site.id))
+          return <button type="button" key={site.id} className={checked ? 'multi-site-option selected' : 'multi-site-option'} onClick={() => toggle(site.id)}>
+            <span className="multi-site-check">{checked ? '✓' : ''}</span>
+            <span><b>{site.site_code}</b><small>{site.site_name}</small></span>
+          </button>
+        }) : <p className="muted empty-site-result">Site tidak ditemukan.</p>}
+      </div>
+      <div className="multi-site-footer">
+        <span>{selectedSites.length ? `${selectedSites.length} site aktif difilter` : 'Semua site aktif ditampilkan'}</span>
+        <button type="button" onClick={() => setOpen(false)}>Terapkan</button>
+      </div>
+    </div>}
+  </div>
+}
+
+function DashboardDateFilter({ dateFrom, dateTo, setDateFrom, setDateTo, onClear, sites = [], siteFilter = [], setSiteFilter, globalView }) {
+  return <Panel title="Filter Dashboard" desc="Plan dihitung dari bulan/tahun planning; actual dihitung dari inspeksi plan pada periode tersebut.">
+    <div className={globalView ? 'dashboard-filter-grid with-site' : 'dashboard-filter-grid'}>
       <label>Dari Tanggal<input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} /></label>
       <label>Sampai Tanggal<input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} /></label>
-      <label>Site<select value={siteFilter} onChange={e=>setSiteFilter(e.target.value)} disabled={!globalView}>
-        {globalView && <option value="ALL">Semua Site</option>}
-        {sites.map(s => <option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}
-      </select></label>
-      <button type="button" className="secondary" onClick={onClear}>Reset Filter</button>
+      {globalView && <MultiSitePicker sites={sites} value={siteFilter} onChange={setSiteFilter}/>} 
+      <button type="button" className="secondary reset-filter-btn" onClick={onClear}>Reset Filter</button>
     </div>
   </Panel>
 }
 
 function SidakDashboard({ context }) {
+  const now = new Date()
+  const currentYear = now.getFullYear()
+  const currentMonth = String(now.getMonth() + 1).padStart(2, '0')
+  const currentMonthStart = `${currentYear}-${currentMonth}-01`
+  const currentMonthEnd = `${currentYear}-${currentMonth}-${String(new Date(currentYear, now.getMonth() + 1, 0).getDate()).padStart(2, '0')}`
   const [plans, setPlans] = useState([])
   const [inspections, setInspections] = useState([])
   const [outs, setOuts] = useState([])
   const [sites, setSites] = useState([])
   const [loading, setLoading] = useState(true)
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
+  const [dateFrom, setDateFrom] = useState(currentMonthStart)
+  const [dateTo, setDateTo] = useState(currentMonthEnd)
   const globalView = isHeadOfficeAdmin(context)
-  const [siteFilter, setSiteFilter] = useState(globalView ? 'ALL' : (context.site_id || 'ALL'))
+  const [siteFilter, setSiteFilter] = useState([])
+  const siteFilterKey = Array.isArray(siteFilter) ? siteFilter.join('|') : String(siteFilter || '')
 
   useEffect(() => {
-    setSiteFilter(globalView ? 'ALL' : (context.site_id || 'ALL'))
+    setSiteFilter([])
   }, [context.id, context.site_id, globalView])
 
-  useEffect(() => { load() }, [context.id, context.site_id, dateFrom, dateTo, siteFilter, globalView])
+  useEffect(() => { load() }, [context.id, context.site_id, dateFrom, dateTo, siteFilterKey, globalView])
 
   async function load() {
     setLoading(true)
-    const selectedSiteId = globalView && siteFilter !== 'ALL' ? siteFilter : (!globalView ? context.site_id : null)
+    const selectedSiteIds = globalView
+      ? (Array.isArray(siteFilter) ? siteFilter.filter(Boolean) : (siteFilter ? [siteFilter] : []))
+      : (context.site_id ? [context.site_id] : [])
 
     try{
       const [p, i, o, s] = await Promise.all([
         fetchAllRows('fatigue_plans', 'id, site_id, bulan, tahun, status, created_at, drivers(nama_driver,nrp_driver), sites(site_name,site_code)', q => {
           q = q.order('created_at', { ascending:false })
-          if (selectedSiteId) q = q.eq('site_id', selectedSiteId)
-          if (dateFrom) q = q.gte('created_at', dateFrom)
-          if (dateTo) q = q.lte('created_at', dateTo + 'T23:59:59')
+          if (selectedSiteIds.length) q = q.in('site_id', selectedSiteIds)
           return q
         }),
         fetchAllRows('fatigue_inspections', 'id, plan_id, site_id, tanggal_inspeksi, status, drivers(nama_driver,nrp_driver), sites(site_name,site_code)', q => {
           q = q.order('created_at', { ascending:false })
-          if (selectedSiteId) q = q.eq('site_id', selectedSiteId)
-          if (dateFrom) q = q.gte('tanggal_inspeksi', dateFrom)
-          if (dateTo) q = q.lte('tanggal_inspeksi', dateTo)
+          if (selectedSiteIds.length) q = q.in('site_id', selectedSiteIds)
           return q
         }),
-        fetchAllRows('fatigue_outstandings', 'id, site_id, description, status, created_at, drivers(nama_driver,nrp_driver), sites(site_name,site_code), fatigue_parameters(parameter_name)', q => {
+        fetchAllRows('fatigue_outstandings', 'id, inspection_id, site_id, description, status, created_at, drivers(nama_driver,nrp_driver), sites(site_name,site_code), fatigue_parameters(parameter_name)', q => {
           q = q.order('created_at', { ascending:false })
-          if (selectedSiteId) q = q.eq('site_id', selectedSiteId)
-          if (dateFrom) q = q.gte('created_at', dateFrom)
-          if (dateTo) q = q.lte('created_at', dateTo + 'T23:59:59')
+          if (selectedSiteIds.length) q = q.in('site_id', selectedSiteIds)
           return q
         }),
         fetchAllRows('sites', 'id, site_name, site_code, status', q => {
           q = q.neq('site_code', 'JIEP').order('site_code', { ascending:true })
-          if (selectedSiteId) q = q.eq('id', selectedSiteId)
+          if (!globalView && selectedSiteIds.length) q = q.in('id', selectedSiteIds)
           return q
         })
       ])
@@ -590,7 +650,62 @@ function SidakDashboard({ context }) {
     }
   }
 
-  const rows = plans.map(r => ({
+  function toDateOnly(value){
+    if (!value) return ''
+    if (typeof value === 'string') return value.slice(0, 10)
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) return ''
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+  }
+
+  function monthBounds(year, month){
+    const y = Number(year)
+    const m = Number(month)
+    if (!y || !m || m < 1 || m > 12) return null
+    const mm = String(m).padStart(2, '0')
+    const lastDay = String(new Date(y, m, 0).getDate()).padStart(2, '0')
+    return { start:`${y}-${mm}-01`, end:`${y}-${mm}-${lastDay}` }
+  }
+
+  function rangeOverlaps(start, end){
+    if (!start || !end) return false
+    if (dateFrom && end < dateFrom) return false
+    if (dateTo && start > dateTo) return false
+    return true
+  }
+
+  function dateInRange(value){
+    if (!dateFrom && !dateTo) return true
+    const date = toDateOnly(value)
+    if (!date) return false
+    if (dateFrom && date < dateFrom) return false
+    if (dateTo && date > dateTo) return false
+    return true
+  }
+
+  function planMatchesPeriod(plan){
+    if (!dateFrom && !dateTo) return true
+
+    // Sumber utama periode plan adalah bulan/tahun planning, bukan created_at.
+    // created_at hanya fallback untuk data lama yang belum memiliki bulan/tahun.
+    const bounds = monthBounds(plan?.tahun, plan?.bulan)
+    if (bounds) return rangeOverlaps(bounds.start, bounds.end)
+    return dateInRange(plan?.created_at)
+  }
+
+  // V70 FIX - denominator selalu total planning pada bulan/periode yang difilter.
+  // Plan bulan depan yang dibuat hari ini tidak lagi masuk ke bulan saat plan dibuat.
+  const dashboardPlans = (plans || []).filter(planMatchesPeriod)
+  const dashboardPlanIds = new Set(dashboardPlans.map(plan => plan.id))
+  const dashboardInspections = (inspections || []).filter(item => item.plan_id && dashboardPlanIds.has(item.plan_id))
+  const dashboardInspectionIds = new Set(dashboardInspections.map(item => item.id))
+  const dashboardOuts = (outs || []).filter(item =>
+    item.inspection_id
+      ? dashboardInspectionIds.has(item.inspection_id)
+      : dateInRange(item.created_at)
+  )
+
+  const rows = dashboardPlans.map(r => ({
     id: r.id,
     site: r.sites?.site_code || '-',
     nama_site: r.sites?.site_name || '-',
@@ -602,12 +717,12 @@ function SidakDashboard({ context }) {
   }))
   // V68 FIX - Achievement dihitung berdasarkan unique plan_id yang Approved.
   // Ini mencegah achievement lebih dari 100% ketika 1 plan punya lebih dari 1 row inspection.
-  const planById = new Map((plans || []).map(plan => [plan.id, plan]))
-  const visiblePlanIds = new Set((plans || []).map(plan => plan.id))
+  const planById = new Map(dashboardPlans.map(plan => [plan.id, plan]))
+  const visiblePlanIds = dashboardPlanIds
 
   function uniqueInspectionPlanIdsByStatus(status){
     return new Set(
-      (inspections || [])
+      dashboardInspections
         .filter(item =>
           item.status === status &&
           item.plan_id &&
@@ -625,18 +740,23 @@ function SidakDashboard({ context }) {
   const submitted = submittedPlanIds.size
   const rejected = rejectedPlanIds.size
 
-  const open = outs.filter(x => x.status === 'Open').length
-  const closePending = outs.filter(x => x.status === 'Closed').length
-  const closed = outs.filter(x => x.status === 'Approved').length
+  const open = dashboardOuts.filter(x => x.status === 'Open').length
+  const closePending = dashboardOuts.filter(x => x.status === 'Closed').length
+  const closed = dashboardOuts.filter(x => x.status === 'Approved').length
 
-  const achievementRaw = plans.length ? Math.round((actual / plans.length) * 100) : 0
+  const achievementRaw = dashboardPlans.length ? Math.round((actual / dashboardPlans.length) * 100) : 0
   const achievement = Math.max(0, Math.min(achievementRaw, 100))
   const safePercent = v => Math.max(0, Math.min(Number.isFinite(v) ? v : 0, 100))
 
   const siteMap = new Map()
   const normalizeSiteCode = value => String(value || '').trim().toUpperCase()
 
-  sites
+  const selectedSiteSet = new Set((Array.isArray(siteFilter) ? siteFilter : []).map(String))
+  const visibleSites = globalView && selectedSiteSet.size
+    ? sites.filter(site => selectedSiteSet.has(String(site.id)))
+    : sites
+
+  visibleSites
     .filter(s => normalizeSiteCode(s.site_code) !== 'JIEP')
     .forEach(s => {
       const code = s.site_code || '-'
@@ -671,7 +791,7 @@ function SidakDashboard({ context }) {
     return siteMap.get(code)
   }
 
-  plans.forEach(plan => {
+  dashboardPlans.forEach(plan => {
     const bucket = getSiteBucket(plan)
     if (bucket) bucket.plan++
   })
@@ -681,7 +801,7 @@ function SidakDashboard({ context }) {
   const siteApprovedPlanIds = new Set()
   const siteSubmittedPlanIds = new Set()
 
-  inspections.forEach(insp => {
+  dashboardInspections.forEach(insp => {
     if (!insp.plan_id || !visiblePlanIds.has(insp.plan_id)) return
 
     const sourcePlan = planById.get(insp.plan_id)
@@ -701,7 +821,7 @@ function SidakDashboard({ context }) {
     }
   })
 
-  outs.filter(o => o.status === 'Open').forEach(o => {
+  dashboardOuts.filter(o => o.status === 'Open').forEach(o => {
     const bucket = getSiteBucket(o)
     if (bucket) bucket.open++
   })
@@ -715,7 +835,7 @@ function SidakDashboard({ context }) {
     }))
     .sort((a,b)=>String(a.site_code || a.site).localeCompare(String(b.site_code || b.site), 'id', { sensitivity:'base' }))
 
-  const temuanRows = outs.map(o => ({
+  const temuanRows = dashboardOuts.map(o => ({
     id: o.id,
     site: o.sites?.site_code || '-',
     nama_site: o.sites?.site_name || '-',
@@ -728,9 +848,14 @@ function SidakDashboard({ context }) {
   const openRows = temuanRows.filter(r => r.status === 'Open')
   const closePendingRows = temuanRows.filter(r => r.status === 'Closed')
   const closeApprovedRows = temuanRows.filter(r => r.status === 'Approved')
-  const selectedSiteName = siteFilter === 'ALL'
-    ? 'Semua Site'
-    : (sites.find(s => s.id === siteFilter)?.site_code || context.sites?.site_code || 'Site')
+  const selectedSites = sites.filter(site => selectedSiteSet.has(String(site.id)))
+  const selectedSiteName = !globalView
+    ? (context.sites?.site_code || 'Site')
+    : !selectedSites.length
+      ? 'Semua Site'
+      : selectedSites.length === 1
+        ? selectedSites[0].site_code
+        : `${selectedSites.length} Site Dipilih`
 
   return <div className="stack sf-dashboard-wrap">
     <SidakDashboardStyle />
@@ -745,7 +870,7 @@ function SidakDashboard({ context }) {
         <small>Achievement</small>
         <strong>{achievement}%</strong>
         <div className="sf-progress"><span style={{width:`${safePercent(achievement)}%`}} /></div>
-        <p>{actual} approved dari {plans.length} plan</p>
+        <p>{actual} actual approved dari {dashboardPlans.length} plan periode terpilih</p>
       </div>
     </div>
 
@@ -759,15 +884,15 @@ function SidakDashboard({ context }) {
       setSiteFilter={setSiteFilter}
       globalView={globalView}
       onClear={()=>{
-        setDateFrom('')
-        setDateTo('')
-        setSiteFilter(globalView ? 'ALL' : (context.site_id || 'ALL'))
+        setDateFrom(currentMonthStart)
+        setDateTo(currentMonthEnd)
+        setSiteFilter([])
       }}
     />
 
     <div className="sf-kpi-grid">
-      <div className="sf-kpi-card"><CalendarCheck size={24}/><span>Plan</span><b>{plans.length}</b></div>
-      <div className="sf-kpi-card"><ClipboardCheck size={24}/><span>Approved</span><b>{actual}</b></div>
+      <div className="sf-kpi-card"><CalendarCheck size={24}/><span>Plan Periode</span><b>{dashboardPlans.length}</b></div>
+      <div className="sf-kpi-card"><ClipboardCheck size={24}/><span>Actual Approved</span><b>{actual}</b></div>
       <div className="sf-kpi-card"><Eye size={24}/><span>Menunggu Approval</span><b>{submitted}</b></div>
       <div className="sf-kpi-card"><AlertTriangle size={24}/><span>Outstanding Open</span><b>{open}</b></div>
       <div className="sf-kpi-card"><CheckCircle2 size={24}/><span>Close Approved</span><b>{closed}</b></div>
@@ -791,8 +916,8 @@ function SidakDashboard({ context }) {
         {loading ? <p>Memuat...</p> : <div className="sf-scroll-table"><DataTable rows={rows}/></div>} 
       </Panel>
       <Panel title="Temuan Terbaru" desc={`${open} open, ${closePending} close request, ${closed} closed`}>
-        {outs.slice(0,5).map(o => <div className="mini-card" key={o.id}><b>{o.fatigue_parameters?.parameter_name || 'Temuan'}</b><StatusPill value={o.status}/><p>{o.description}</p><small>{o.sites?.site_code} · {o.drivers?.nama_driver}</small></div>)}
-        {outs.length === 0 && <p className="muted">Belum ada temuan.</p>}
+        {dashboardOuts.slice(0,5).map(o => <div className="mini-card" key={o.id}><b>{o.fatigue_parameters?.parameter_name || 'Temuan'}</b><StatusPill value={o.status}/><p>{o.description}</p><small>{o.sites?.site_code} · {o.drivers?.nama_driver}</small></div>)}
+        {dashboardOuts.length === 0 && <p className="muted">Belum ada temuan.</p>}
       </Panel>
     </div>
 

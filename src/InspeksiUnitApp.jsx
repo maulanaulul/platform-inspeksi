@@ -505,26 +505,84 @@ function DashboardV52Styles(){
   return <style data-dashboard-v52>{DASHBOARD_V52_INLINE_CSS}</style>
 }
 
-function DashboardDateFilter({ dateFrom, dateTo, setDateFrom, setDateTo, siteFilter, setSiteFilter, sites, canChooseSite, onClear }) {
-  return <Panel title="Filter Dashboard" desc="Pilih tanggal dan site sesuai kebutuhan.">
-    <div className="form-grid">
+
+function MultiSitePicker({ sites = [], value = [], onChange }){
+  const selectedIds = Array.isArray(value) ? value.map(String) : (value ? [String(value)] : [])
+  const [open, setOpen] = useState(false)
+  const [q, setQ] = useState('')
+  const selectedSites = sites.filter(site => selectedIds.includes(String(site.id)))
+  const selectedSet = new Set(selectedIds)
+  const search = q.trim().toLowerCase()
+  const filteredSites = sites.filter(site => {
+    if (!search) return true
+    return `${site.site_code || ''} ${site.site_name || ''}`.toLowerCase().includes(search)
+  })
+
+  function toggle(id){
+    const siteId = String(id)
+    const next = selectedSet.has(siteId)
+      ? selectedIds.filter(item => item !== siteId)
+      : [...selectedIds, siteId]
+    onChange(next)
+  }
+
+  return <div className={open ? 'multi-site-picker open' : 'multi-site-picker'}>
+    <div className="multi-site-label-row">
+      <span>Site</span>
+      <small>Bisa pilih lebih dari satu</small>
+    </div>
+    <button type="button" className="multi-site-trigger" onClick={() => setOpen(!open)}>
+      <div className="multi-site-trigger-copy">
+        {selectedSites.length ? <div className="multi-site-chips">
+          {selectedSites.slice(0, 5).map(site => <span key={site.id}>{site.site_code}</span>)}
+          {selectedSites.length > 5 && <span>+{selectedSites.length - 5}</span>}
+        </div> : <b>Semua site aktif</b>}
+        <small>{selectedSites.length ? `${selectedSites.length} site dipilih` : 'Kosong berarti semua site ditampilkan'}</small>
+      </div>
+      <span className={open ? 'multi-site-arrow open' : 'multi-site-arrow'}>⌄</span>
+    </button>
+    {open && <div className="multi-site-dropdown">
+      <div className="multi-site-tools">
+        <div className="multi-site-search"><Search size={16}/><input value={q} onChange={e => setQ(e.target.value)} placeholder="Cari site..." /></div>
+        <div className="multi-site-tool-buttons">
+          <button type="button" className="secondary small" onClick={() => onChange(sites.map(site => String(site.id)))}>Pilih Semua</button>
+          <button type="button" className="secondary small" onClick={() => onChange([])}>Kosongkan</button>
+        </div>
+      </div>
+      <div className="multi-site-options">
+        {filteredSites.length ? filteredSites.map(site => {
+          const checked = selectedSet.has(String(site.id))
+          return <button type="button" key={site.id} className={checked ? 'multi-site-option selected' : 'multi-site-option'} onClick={() => toggle(site.id)}>
+            <span className="multi-site-check">{checked ? '✓' : ''}</span>
+            <span><b>{site.site_code}</b><small>{site.site_name}</small></span>
+          </button>
+        }) : <p className="muted empty-site-result">Site tidak ditemukan.</p>}
+      </div>
+      <div className="multi-site-footer">
+        <span>{selectedSites.length ? `${selectedSites.length} site aktif difilter` : 'Semua site aktif ditampilkan'}</span>
+        <button type="button" onClick={() => setOpen(false)}>Terapkan</button>
+      </div>
+    </div>}
+  </div>
+}
+
+function DashboardDateFilter({ dateFrom, dateTo, setDateFrom, setDateTo, siteFilter = [], setSiteFilter, sites = [], canChooseSite, onClear }) {
+  return <Panel title="Filter Dashboard" desc="Plan dihitung dari bulan/tahun planning; actual dihitung dari inspeksi plan pada periode tersebut.">
+    <div className={canChooseSite ? 'dashboard-filter-grid with-site' : 'dashboard-filter-grid'}>
       <label>Dari Tanggal<input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} /></label>
       <label>Sampai Tanggal<input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} /></label>
-      <label>Site
-        <select value={siteFilter} onChange={e=>setSiteFilter(e.target.value)} disabled={!canChooseSite}>
-          {canChooseSite && <option value="">Semua Site</option>}
-          {sites.map(s => <option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}
-        </select>
-      </label>
-      <button type="button" className="secondary" onClick={onClear}>Reset Filter</button>
+      {canChooseSite && <MultiSitePicker sites={sites} value={siteFilter} onChange={setSiteFilter}/>} 
+      <button type="button" className="secondary reset-filter-btn" onClick={onClear}>Reset Filter</button>
     </div>
   </Panel>
 }
 
 function Dashboard({ context }){
   const now = new Date()
-  const monthStartStr = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10)
-  const monthEndStr = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10)
+  const currentYear = now.getFullYear()
+  const currentMonth = String(now.getMonth() + 1).padStart(2, '0')
+  const monthStartStr = `${currentYear}-${currentMonth}-01`
+  const monthEndStr = `${currentYear}-${currentMonth}-${String(new Date(currentYear, now.getMonth() + 1, 0).getDate()).padStart(2, '0')}`
 
   const [dateFrom, setDateFrom] = useState(monthStartStr)
   const [dateTo, setDateTo] = useState(monthEndStr)
@@ -534,11 +592,11 @@ function Dashboard({ context }){
   const [findings, setFindings] = useState([])
   const [sites, setSites] = useState([])
   const [units, setUnits] = useState([])
-  const [siteFilter, setSiteFilter] = useState(isHeadOfficeAdmin(context) ? '' : (context.site_id || ''))
+  const [siteFilter, setSiteFilter] = useState([])
   const [error, setError] = useState('')
 
   useEffect(() => {
-    setSiteFilter(isHeadOfficeAdmin(context) ? '' : (context.site_id || ''))
+    setSiteFilter([])
   }, [context.id, context.site_id])
 
   useEffect(() => { load() }, [context.id])
@@ -591,7 +649,11 @@ function Dashboard({ context }){
   }
 
   const canChooseSite = isHeadOfficeAdmin(context)
-  const effectiveSiteId = canChooseSite ? siteFilter : (context.site_id || '')
+  const selectedSiteIds = canChooseSite
+    ? (Array.isArray(siteFilter) ? siteFilter.filter(Boolean).map(String) : (siteFilter ? [String(siteFilter)] : []))
+    : (context.site_id ? [String(context.site_id)] : [])
+  const selectedSiteSet = new Set(selectedSiteIds)
+  const matchesSelectedSite = siteId => !selectedSiteIds.length || selectedSiteSet.has(String(siteId || ''))
 
   function toDateOnly(value){
     if (!value) return ''
@@ -612,7 +674,7 @@ function Dashboard({ context }){
     const y = Number(plan?.tahun)
     const m = Number(plan?.bulan)
     if (!y || !m) return ''
-    return new Date(y, m, 0).toISOString().slice(0, 10)
+    return `${y}-${String(m).padStart(2, '0')}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`
   }
 
   function dateInRange(value){
@@ -635,60 +697,38 @@ function Dashboard({ context }){
   function planMatchesDate(plan){
     if (!dateFrom && !dateTo) return true
 
-    // Plan bulanan lebih tepat dibaca dari due_date atau bulan/tahun.
-    // created_at hanya fallback untuk data lama yang belum punya due_date/bulan/tahun.
-    if (plan?.due_date && dateInRange(plan.due_date)) return true
-    if (monthOverlapRange(plan)) return true
-    if (!plan?.due_date && !plan?.bulan && !plan?.tahun && dateInRange(plan?.created_at)) return true
-
-    return false
+    // Prioritas periode plan: bulan/tahun planning.
+    // due_date lalu created_at hanya fallback untuk data lama.
+    if (plan?.bulan && plan?.tahun) return monthOverlapRange(plan)
+    if (plan?.due_date) {
+      const due = toDateOnly(plan.due_date)
+      if (!due) return false
+      const [year, month] = due.split('-').map(Number)
+      const fallbackPlan = { tahun:year, bulan:month }
+      return monthOverlapRange(fallbackPlan)
+    }
+    return dateInRange(plan?.created_at)
   }
 
-  function recordMatchesDate(record){
-    if (!dateFrom && !dateTo) return true
-    return dateInRange(record?.inspected_at) || dateInRange(record?.created_at) || dateInRange(record?.approved_at)
-  }
+  const siteScopedPlans = plans.filter(p => matchesSelectedSite(p.site_id))
+  const siteScopedRecords = records.filter(r => matchesSelectedSite(r.site_id))
+  const siteScopedFindings = findings.filter(f => matchesSelectedSite(f.site_id))
 
-  function findingMatchesDate(finding){
-    if (!dateFrom && !dateTo) return true
-    return (
-      dateInRange(finding?.created_at) ||
-      dateInRange(finding?.updated_at) ||
-      dateInRange(finding?.close_requested_at) ||
-      dateInRange(finding?.close_approved_at)
-    )
-  }
-
-  const siteScopedPlans = effectiveSiteId ? plans.filter(p => p.site_id === effectiveSiteId) : plans
-  const siteScopedRecords = effectiveSiteId ? records.filter(r => r.site_id === effectiveSiteId) : records
-  const siteScopedFindings = effectiveSiteId ? findings.filter(f => f.site_id === effectiveSiteId) : findings
-
-  const recordsInRange = siteScopedRecords.filter(recordMatchesDate)
-  const findingsInRange = siteScopedFindings.filter(findingMatchesDate)
-
-  // V69 FIX:
-  // Dashboard plan tidak hanya dari created_at plan.
-  // Plan akan ikut tampil kalau due_date/bulan-tahun masuk range, atau kalau record/finding terkait masuk range.
-  // Ini mencegah site terlihat 0% padahal inspeksi sudah approved/closed.
-  const relatedPlanIdsFromRecords = new Set(recordsInRange.map(r => r.plan_id).filter(Boolean))
-  const relatedPlanIdsFromFindings = new Set(findingsInRange.map(f => f.plan_id).filter(Boolean))
-
-  const dashboardPlans = siteScopedPlans.filter(plan =>
-    planMatchesDate(plan) ||
-    relatedPlanIdsFromRecords.has(plan.id) ||
-    relatedPlanIdsFromFindings.has(plan.id)
-  )
+  // V70 FIX:
+  // Denominator hanya total planning pada bulan/periode yang difilter.
+  // Record atau temuan dari bulan lain tidak boleh menarik plan lain masuk ke denominator.
+  const dashboardPlans = siteScopedPlans.filter(planMatchesDate)
 
   const dashboardPlanIds = new Set(dashboardPlans.map(p => p.id))
-  const dashboardRecords = siteScopedRecords.filter(record =>
-    (record.plan_id && dashboardPlanIds.has(record.plan_id)) || recordMatchesDate(record)
-  )
+  const dashboardRecords = siteScopedRecords.filter(record => record.plan_id && dashboardPlanIds.has(record.plan_id))
+  const dashboardRecordIds = new Set(dashboardRecords.map(record => record.id))
   const dashboardFindings = siteScopedFindings.filter(finding =>
-    (finding.plan_id && dashboardPlanIds.has(finding.plan_id)) || findingMatchesDate(finding)
+    (finding.plan_id && dashboardPlanIds.has(finding.plan_id)) ||
+    (finding.record_id && dashboardRecordIds.has(finding.record_id))
   )
-  const dashboardSites = [...(effectiveSiteId ? sites.filter(s => s.id === effectiveSiteId) : sites)]
+  const dashboardSites = sites.filter(site => matchesSelectedSite(site.id))
     .sort((a,b)=>String(a.site_code || a.site_name || '').localeCompare(String(b.site_code || b.site_name || ''), 'id', { numeric:true, sensitivity:'base' }))
-  const dashboardUnits = effectiveSiteId ? units.filter(u => u.site_id === effectiveSiteId) : units
+  const dashboardUnits = units.filter(unit => matchesSelectedSite(unit.site_id))
 
   const planById = new Map(dashboardPlans.map(plan => [plan.id, plan]))
 
@@ -701,9 +741,7 @@ function Dashboard({ context }){
   function completedPlanIdsForCategory(categoryKey, siteId = null){
     const ids = new Set()
 
-    // Sumber utama: inspection_records Approved.
-    // Ini lebih akurat daripada hanya membaca inspection_plans.status,
-    // karena beberapa data lama bisa tidak sinkron status plan-nya.
+    // Actual wajib berasal dari inspection_records Approved milik plan periode terpilih.
     dashboardRecords.forEach(record => {
       if (record.status !== 'Approved') return
       if (!record.plan_id) return
@@ -712,15 +750,6 @@ function Dashboard({ context }){
       if (categoryKey && plan.category !== categoryKey && record.category !== categoryKey) return
       if (siteId && (plan.site_id || record.site_id) !== siteId) return
       ids.add(record.plan_id)
-    })
-
-    // Fallback: inspection_plans Approved.
-    // Ini menjaga data tetap terbaca kalau record relasi tidak lengkap.
-    dashboardPlans.forEach(plan => {
-      if (plan.status !== 'Approved') return
-      if (categoryKey && plan.category !== categoryKey) return
-      if (siteId && plan.site_id !== siteId) return
-      ids.add(plan.id)
     })
 
     return ids
@@ -737,13 +766,6 @@ function Dashboard({ context }){
       if (categoryKey && plan.category !== categoryKey && record.category !== categoryKey) return
       if (siteId && (plan.site_id || record.site_id) !== siteId) return
       ids.add(record.plan_id)
-    })
-
-    dashboardPlans.forEach(plan => {
-      if (plan.status !== 'Submitted') return
-      if (categoryKey && plan.category !== categoryKey) return
-      if (siteId && plan.site_id !== siteId) return
-      ids.add(plan.id)
     })
 
     return ids
@@ -763,9 +785,9 @@ function Dashboard({ context }){
       title:'PM Check',
       tone:'pm',
       icon:<Truck size={24}/> ,
-      desc:'Target 2 kali PM Check per unit aktif.',
-      targetLabel:'Target PM/Bulan',
-      targetValue:dashboardUnits.length * 2
+      desc:'Achievement berdasarkan total plan PM pada periode filter.',
+      targetLabel:'Total Plan PM',
+      targetValue:null
     },
     {
       key:'Inspeksi Unit',
@@ -795,7 +817,7 @@ function Dashboard({ context }){
     const catFindings = dashboardFindings.filter(f => f.category === def.key)
     const approvedIds = completedPlanIdsForCategory(def.key)
     const submittedIds = submittedPlanIdsForCategory(def.key)
-    const target = def.targetValue === null ? catPlans.length : Math.max(def.targetValue, catPlans.length)
+    const target = catPlans.length
 
     return {
       ...def,
@@ -815,19 +837,19 @@ function Dashboard({ context }){
 
   const pmPlans = dashboardPlans.filter(p => p.category === 'PM Check')
   const pmApprovedIds = completedPlanIdsForCategory('PM Check')
-  const pmUnitTarget = dashboardUnits.length * 2
+  const pmUnitTarget = pmPlans.length
   const pmAchievement = safePercent(pmApprovedIds.size, pmUnitTarget)
 
   const pmRows = dashboardSites.map(s => {
     const siteUnits = dashboardUnits.filter(u => u.site_id === s.id).length
-    const target = siteUnits * 2
+    const target = pmPlans.filter(plan => plan.site_id === s.id).length
     const actual = completedPlanIdsForCategory('PM Check', s.id).size
 
     return {
       site:s.site_code,
       site_name:s.site_name,
       unit_aktif:siteUnits,
-      target_pm_bulanan:target,
+      total_plan_pm:target,
       pm_approved:actual,
       belum_pm:Math.max(target-actual,0),
       achievement:`${safePercent(actual,target)}%`
@@ -910,11 +932,11 @@ function Dashboard({ context }){
       dateTo={dateTo}
       setDateFrom={setDateFrom}
       setDateTo={setDateTo}
-      siteFilter={effectiveSiteId}
+      siteFilter={siteFilter}
       setSiteFilter={setSiteFilter}
       sites={sites}
       canChooseSite={canChooseSite}
-      onClear={()=>{ setDateFrom(''); setDateTo(''); if (canChooseSite) setSiteFilter('') }}
+      onClear={()=>{ setDateFrom(monthStartStr); setDateTo(monthEndStr); setSiteFilter([]) }}
     />
 
     <section className="dashboard-hero-panel">
@@ -926,14 +948,14 @@ function Dashboard({ context }){
     </section>
 
     <div className="kpi-grid executive-kpi-grid">
-      <Kpi title="Total Plan" value={dashboardPlans.length} icon={<CalendarCheck/>} />
-      <Kpi title="Plan Approved" value={approvedPlans} icon={<CheckCircle2/>} />
+      <Kpi title="Total Plan Periode" value={dashboardPlans.length} icon={<CalendarCheck/>} />
+      <Kpi title="Actual Approved" value={approvedPlans} icon={<CheckCircle2/>} />
       <Kpi title="Menunggu Approval" value={waitingApproval} icon={<Eye/>} />
       <Kpi title="Temuan Open" value={openFindings} icon={<AlertTriangle/>} />
       <Kpi title="Close Request" value={closeRequested} icon={<ClipboardCheck/>} />
       <Kpi title="Temuan Closed" value={closedFindings} icon={<Check/>} />
       <Kpi title="Plan Rejected" value={rejectedPlans} icon={<XCircle/>} />
-      <Kpi title="Target PM Check" value={pmUnitTarget} icon={<Truck/>} />
+      <Kpi title="Plan PM Check" value={pmUnitTarget} icon={<Truck/>} />
     </div>
 
     <div className="dashboard-category-grid">
@@ -947,11 +969,11 @@ function Dashboard({ context }){
       <DataTable rows={categoryRows}/>
     </Panel>
 
-    <Panel title="Dashboard PM Check" desc="Pencapaian PM Check dihitung dari target 2 kali PM Check per unit aktif setiap bulan." action={<button onClick={()=>downloadXlsx('dashboard-pm-check.xlsx', pmRows)}><Download size={16}/> Export Excel</button>}>
-      <div className="summary-strip"><span><b>{dashboardUnits.length}</b> Unit Aktif</span><span><b>{pmUnitTarget}</b> Target PM/Bulan</span><span><b>{pmApprovedIds.size}</b> PM Approved</span><span><b>{pmAchievement}%</b> Achievement PM</span></div>
+    <Panel title="Dashboard PM Check" desc="Pencapaian PM Check dihitung dari total plan PM pada bulan/periode yang difilter dan actual approved dari plan tersebut." action={<button onClick={()=>downloadXlsx('dashboard-pm-check.xlsx', pmRows)}><Download size={16}/> Export Excel</button>}>
+      <div className="summary-strip"><span><b>{dashboardUnits.length}</b> Unit Aktif</span><span><b>{pmUnitTarget}</b> Total Plan PM</span><span><b>{pmApprovedIds.size}</b> Actual Approved</span><span><b>{pmAchievement}%</b> Achievement PM</span></div>
       <div className="site-chart">
         {pmRows.map(r => <div className="site-bar" key={r.site}>
-          <div className="site-meta"><b>{r.site}</b><span>{r.pm_approved}/{r.target_pm_bulanan} · {r.achievement}</span></div>
+            <div className="site-meta"><b>{r.site}</b><span>{r.pm_approved}/{r.total_plan_pm} · {r.achievement}</span></div>
           <div className="bar"><span style={{ width: `${Math.min(parseInt(r.achievement) || 0, 100)}%` }} /></div>
         </div>)}
         {!pmRows.length && <p className="muted">Belum ada data PM Check.</p>}
