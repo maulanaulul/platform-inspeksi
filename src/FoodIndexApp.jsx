@@ -23,17 +23,38 @@ function canAdmin(role){ return ADMIN_ROLES.includes(role) }
 function canApprove(role){ return ADMIN_ROLES.includes(role) || ATASAN_ROLES.includes(role) }
 function canInspect(role){ return ADMIN_ROLES.includes(role) || GL_ROLES.includes(role) || ATASAN_ROLES.includes(role) }
 function cleanText(v){ return String(v ?? '').trim() }
-function today(){ return new Date().toISOString().slice(0, 10) }
+function toLocalCalendarDate(value = new Date()){
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return new Date(value.getFullYear(), value.getMonth(), value.getDate(), 12, 0, 0, 0)
+  }
+  const text = String(value || '').slice(0, 10)
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (match) return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 12, 0, 0, 0)
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return new Date()
+  return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate(), 12, 0, 0, 0)
+}
+function formatLocalCalendarDate(value){
+  const d = toLocalCalendarDate(value)
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+function today(){ return formatLocalCalendarDate(new Date()) }
 function startOfWeekMonday(date = new Date()){
-  const d = new Date(date)
+  const d = toLocalCalendarDate(date)
   const day = d.getDay() || 7
   if (day !== 1) d.setDate(d.getDate() - day + 1)
-  return d.toISOString().slice(0, 10)
+  return formatLocalCalendarDate(d)
 }
 function endOfWeekSunday(monday){
-  const d = new Date(monday)
+  const d = toLocalCalendarDate(monday)
   d.setDate(d.getDate() + 6)
-  return d.toISOString().slice(0, 10)
+  return formatLocalCalendarDate(d)
+}
+function endOfMonthLocal(year, month){
+  return formatLocalCalendarDate(new Date(Number(year), Number(month), 0, 12, 0, 0, 0))
 }
 function statusClass(value=''){
   const v = String(value).toLowerCase()
@@ -348,6 +369,43 @@ function FoodIndexScopedStyles(){
     .food-index-app .inspection-entry-modal .food-modal-head, .food-index-app .inspection-entry-modal .sticky-actions { flex: 0 0 auto; }
     .food-index-app .inspection-entry-modal .sticky-actions { position: static !important; }
     .food-index-app .food-modal-head { padding: 26px 30px 18px; border-bottom: 1px solid #e8eef8; }
+
+    /* Compact edit modal used by Food Index Administrator master data. */
+    .food-index-app .food-edit-backdrop {
+      position: fixed !important;
+      inset: 0 !important;
+      z-index: 9998 !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      padding: 18px !important;
+      background: rgba(15, 23, 42, .58) !important;
+      backdrop-filter: blur(7px) !important;
+      overflow: auto !important;
+    }
+    .food-index-app .food-edit-modal {
+      width: min(720px, calc(100vw - 32px));
+      max-height: calc(100dvh - 36px);
+      overflow: hidden;
+      margin: auto;
+      position: relative;
+      z-index: 9999;
+      background: #fff;
+      display: flex;
+      flex-direction: column;
+    }
+    .food-index-app .food-edit-modal .food-modal-head { flex: 0 0 auto; }
+    .food-index-app .food-edit-form {
+      padding: 22px 26px 26px;
+      overflow-y: auto;
+      min-height: 0;
+    }
+    .food-index-app .food-edit-form .modal-actions {
+      margin-top: 18px;
+      padding: 0;
+      border-top: 0;
+      background: transparent;
+    }
 
     .food-index-app .self-password-backdrop {
       position: fixed !important;
@@ -1569,7 +1627,7 @@ function foodTaskMatchesDashboardPeriod(task, year, month, week='ALL'){
 
   if (year !== 'ALL' && month !== 'ALL') {
     const periodStart = `${year}-${String(month).padStart(2,'0')}-01`
-    const periodEnd = new Date(Number(year), Number(month), 0).toISOString().slice(0,10)
+    const periodEnd = endOfMonthLocal(year, month)
     return dateRangeOverlap(start, end, periodStart, periodEnd)
   }
 
@@ -1605,78 +1663,13 @@ function normalizeFoodTaskStatusValue(value){
   return raw || 'Open'
 }
 
-// V70 FIX:
-// Dashboard dan tasklist tidak boleh hanya percaya kolom status mentah.
-// Jika approved_at / approved_by sudah terisi, task dianggap Approved walaupun status mentah masih Waiting Approval.
-function normalizeFoodLifecycleStatus(value){
-  const raw = cleanText(value)
-  const key = raw.toLowerCase().replace(/[\s_-]+/g, '')
-
-  if (!key) return ''
-  if (['approved','approve','closed','close','validated','valid'].includes(key)) return 'Approved'
-  if (['waitingapproval','waitapproval','waitingapprove','menungguapproval'].includes(key)) return 'Waiting Approval'
-  if (['waitingcloseapproval','waitingclose','closeapproval'].includes(key)) return 'Waiting Close Approval'
-  if (['needactionplan','actionplan','needap','butuhactionplan'].includes(key)) return 'Need Action Plan'
-  if (['inprogress','progress','started','start'].includes(key)) return 'In Progress'
-  if (['rejected','reject','ditolak'].includes(key)) return 'Rejected'
-  if (['expired','expire','kedaluwarsa'].includes(key)) return 'Expired'
-  if (['open','planned','plan'].includes(key)) return 'Open'
-
-  return raw
-}
-
-function taskHasApprovedFindingEvidence(task){
-  const findings = Array.isArray(task?.food_findings) ? task.food_findings : []
-  if (!findings.length) return false
-
-  return findings.every(f => {
-    const status = normalizeFoodLifecycleStatus(f?.status)
-    return (
-      status === 'Approved' ||
-      status === 'Closed' ||
-      Boolean(f?.validated_at) ||
-      Boolean(f?.approved_at)
-    )
-  })
-}
-
-function taskHasClosedOutstandingEvidence(task){
-  const outstandings = Array.isArray(task?.food_outstandings) ? task.food_outstandings : []
-  if (!outstandings.length) return false
-
-  return outstandings.every(o => {
-    const status = normalizeFoodLifecycleStatus(o?.status)
-    return (
-      status === 'Approved' ||
-      status === 'Closed' ||
-      Boolean(o?.approved_at)
-    )
-  })
-}
-
-function foodOutstandingIsClosed(row){
-  const key = cleanText(row?.status).toLowerCase().replace(/[\s_-]+/g, '')
-  return ['closed','close','approved','approve'].includes(key) || Boolean(row?.approved_at)
-}
-
-function foodTaskCloseCycleCompleted(task){
-  const outstandings = Array.isArray(task?.food_outstandings) ? task.food_outstandings : []
-  return outstandings.length > 0 && outstandings.every(foodOutstandingIsClosed)
-}
-
-function taskHasApprovedRelatedEvidence(task){
-  return taskHasApprovedFindingEvidence(task) || taskHasClosedOutstandingEvidence(task)
-}
-
-// V72 FIX:
-// Dashboard Food Index tidak boleh tetap Waiting Approval jika approval sudah selesai
-// tetapi status task belum sinkron. Selain status/approved_at, dashboard juga membaca
-// bukti final dari finding/outstanding yang sudah Approved/Closed.
+// Dashboard, tasklist, dan approval hanya boleh menganggap task Approved
+// berdasarkan status/jejak approval pada task itu sendiri.
+// validated_at pada finding hanya menandakan action plan sudah diisi, bukan approval inspeksi.
 function foodTaskEffectiveStatus(task){
   const normalized = normalizeFoodTaskStatusValue(task?.status)
   if (normalized === 'Approved') return 'Approved'
   if (task?.approved_at || task?.approved_by) return 'Approved'
-  if (taskHasApprovedRelatedEvidence(task)) return 'Approved'
   return normalized
 }
 
@@ -1783,9 +1776,22 @@ function FoodAdminPanel({ context, profile }){
   const [manual, setManual] = useState({ nama:'', nrp:'', email:'', password:'', role:'GL', site_id:'' })
   const [uploadRows, setUploadRows] = useState([])
   const [resetForm, setResetForm] = useState({ access_id:'', password:'' })
+  const [editAccess, setEditAccess] = useState({ id:null, role:'GL', site_id:'', status:'Aktif' })
+  const [accessSearch, setAccessSearch] = useState('')
 
   useEffect(() => { load() }, [context?.id])
   useEffect(() => { if (!msg) return; const t = setTimeout(()=>setMsg(''), 7000); return () => clearTimeout(t) }, [msg])
+  useEffect(() => {
+    if (!editAccess.id) return
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const onKeyDown = e => { if (e.key === 'Escape' && !saving) cancelEditAccess() }
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [editAccess.id, saving])
 
   async function load(){
     setLoading(true); setError('')
@@ -1899,6 +1905,89 @@ function FoodAdminPanel({ context, profile }){
     setSaving(false)
   }
 
+  function beginEditAccess(row){
+    const role = foodRoleFromAccess(row) || 'GL'
+    setEditAccess({
+      id: row.id,
+      role,
+      site_id: role === 'Administrator' ? '' : (row.site_id || ''),
+      status: isActiveFoodStatus(row.status) ? 'Aktif' : 'Nonaktif'
+    })
+    setMsg('')
+    setError('')
+  }
+  function cancelEditAccess(){
+    setEditAccess({ id:null, role:'GL', site_id:'', status:'Aktif' })
+  }
+  async function saveAccessEdit(e){
+    e?.preventDefault?.()
+    if (!editAccess.id) return
+    setSaving(true); setMsg(''); setError('')
+    try {
+      const current = accessRows.find(r => String(r.id) === String(editAccess.id))
+      if (!current) throw new Error('Data akses tidak ditemukan. Refresh lalu coba lagi.')
+
+      const foodRole = normalizeRole(editAccess.role)
+      if (!FOOD_ACCESS_ROLES.includes(foodRole)) throw new Error('Role Food Index tidak valid.')
+      const siteId = foodRole === 'Administrator' ? null : cleanText(editAccess.site_id)
+      if (foodRole !== 'Administrator' && !siteId) throw new Error('Site wajib dipilih untuk role GL, Section Head, dan Dept Head.')
+
+      const payload = {
+        role: foodUiRoleToDbRole(foodRole),
+        food_role_level: foodRole,
+        site_id: siteId || null,
+        status: editAccess.status === 'Nonaktif' ? 'Nonaktif' : 'Aktif'
+      }
+
+      if (payload.status === 'Aktif') {
+        const duplicate = accessRows.find(r =>
+          String(r.id) !== String(current.id) &&
+          String(r.user_id) === String(current.user_id) &&
+          String(r.app_id) === String(current.app_id) &&
+          foodUiRoleToDbRole(foodRoleFromAccess(r)) === payload.role &&
+          String(r.site_id || '') === String(payload.site_id || '') &&
+          isActiveFoodStatus(r.status)
+        )
+        if (duplicate) throw new Error('Akses aktif dengan role dan site yang sama sudah ada untuk user ini.')
+      }
+
+      const { error } = await supabase
+        .from('user_app_access')
+        .update(payload)
+        .eq('id', current.id)
+      if (error) throw error
+
+      setMsg(`Akses ${current.users_profile?.email || current.users_profile?.nama || ''} berhasil diperbarui.`)
+      cancelEditAccess()
+      await load()
+    } catch(e){ setError(e.message) }
+    setSaving(false)
+  }
+  async function toggleAccessStatus(row){
+    setSaving(true); setMsg(''); setError('')
+    try {
+      const next = isActiveFoodStatus(row.status) ? 'Nonaktif' : 'Aktif'
+      if (next === 'Aktif') {
+        const foodRole = foodRoleFromAccess(row)
+        const duplicate = accessRows.find(r =>
+          String(r.id) !== String(row.id) &&
+          String(r.user_id) === String(row.user_id) &&
+          String(r.app_id) === String(row.app_id) &&
+          foodUiRoleToDbRole(foodRoleFromAccess(r)) === foodUiRoleToDbRole(foodRole) &&
+          String(r.site_id || '') === String(row.site_id || '') &&
+          isActiveFoodStatus(r.status)
+        )
+        if (duplicate) throw new Error('Tidak dapat mengaktifkan akses karena mapping aktif dengan role dan site yang sama sudah ada.')
+      }
+      const { error } = await supabase.from('user_app_access').update({ status:next }).eq('id', row.id)
+      if (error) throw error
+      setMsg(`Akses ${row.users_profile?.email || row.users_profile?.nama || ''} ${next.toLowerCase()}.`)
+      if (String(editAccess.id) === String(row.id)) cancelEditAccess()
+      await load()
+    } catch(e){ setError(e.message) }
+    setSaving(false)
+  }
+
   function downloadTemplate(){
     downloadXlsx('template-user-food-index.xlsx', [{ nama:'Budi Santoso', nrp:'NRP001', email:'budi@email.com', password:'Password123', role:'GL', site_code:'JIEP' }])
   }
@@ -1911,6 +2000,18 @@ function FoodAdminPanel({ context, profile }){
     site: r.sites?.site_code || 'All Site',
     status: r.status || '-'
   }))
+  const searchKey = accessSearch.trim().toLowerCase()
+  const filteredAccessRows = accessRows.filter(r => !searchKey || [
+    r.users_profile?.email,
+    r.users_profile?.nama,
+    r.users_profile?.nrp,
+    foodRoleFromAccess(r),
+    r.role,
+    r.sites?.site_code,
+    r.sites?.site_name,
+    r.status
+  ].some(v => String(v || '').toLowerCase().includes(searchKey)))
+
   return <div className="stack food-admin-panel">
     {msg && <div className="success">{msg}</div>}{error && <div className="error">{error}</div>}
     <Panel title="Tambah User Food Index" desc="Membuat akun login Supabase Auth sekaligus mapping akses Food Index." action={<button className="secondary" onClick={load} disabled={loading}>{loading ? 'Memuat...' : 'Refresh'}</button>}>
@@ -1924,6 +2025,32 @@ function FoodAdminPanel({ context, profile }){
         <button disabled={saving}>{saving ? 'Menyimpan...' : 'Buat User Food Index'}</button>
       </form>
     </Panel>
+
+    {editAccess.id && <div className="modal-backdrop food-modal-backdrop food-edit-backdrop" role="dialog" aria-modal="true" aria-labelledby="food-access-edit-title" onMouseDown={e=>{ if (e.target === e.currentTarget && !saving) cancelEditAccess() }}>
+      <div className="modal-card food-edit-modal" onMouseDown={e=>e.stopPropagation()}>
+        <div className="modal-head food-modal-head">
+          <div>
+            <span className="modal-eyebrow">Administrator Food Index</span>
+            <h3 id="food-access-edit-title">Edit Akses Food Index</h3>
+            <p>Ubah role, site, atau status akses user tanpa membuat akun baru.</p>
+          </div>
+          <button type="button" className="icon close-btn" onClick={cancelEditAccess} disabled={saving} aria-label="Tutup modal"><X size={18}/></button>
+        </div>
+        <form className="food-edit-form" onSubmit={saveAccessEdit}>
+          <div className="form-grid">
+            <label>User<input disabled value={accessRows.find(r=>String(r.id)===String(editAccess.id))?.users_profile?.email || '-'} /></label>
+            <label>Role<select value={editAccess.role} onChange={e=>setEditAccess({...editAccess, role:e.target.value, site_id:e.target.value==='Administrator'?'':editAccess.site_id})}>{FOOD_ACCESS_ROLES.map(r=><option key={r} value={r}>{r}</option>)}</select></label>
+            <label>Site<select value={editAccess.site_id} onChange={e=>setEditAccess({...editAccess,site_id:e.target.value})} disabled={editAccess.role==='Administrator'}><option value="">{editAccess.role === 'Administrator' ? 'All Site' : 'Pilih Site'}</option>{sites.map(s=><option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}</select></label>
+            <label>Status<select value={editAccess.status} onChange={e=>setEditAccess({...editAccess,status:e.target.value})}><option>Aktif</option><option>Nonaktif</option></select></label>
+          </div>
+          <div className="modal-actions inline-actions">
+            <button type="button" className="secondary" onClick={cancelEditAccess} disabled={saving}>Batal</button>
+            <button disabled={saving}>{saving ? 'Menyimpan...' : 'Simpan Perubahan'}</button>
+          </div>
+        </form>
+      </div>
+    </div>}
+
     <Panel title="Upload User Food Index Excel" desc="Kolom: nama, nrp, email, password, role, site_code. Role: Administrator, GL, Section Head, Dept Head." action={<button className="secondary" onClick={downloadTemplate}><Download size={16}/> Download Template</button>}>
       <div className="upload-actions"><label className="upload-tile"><Upload size={20}/><b>Upload Excel</b><input type="file" accept=".xlsx,.xls" hidden onChange={e=>handleUploadExcel(e.target.files?.[0])}/></label>{!!uploadRows.length && <button onClick={importExcelUsers} disabled={saving}>{saving ? 'Importing...' : 'Submit Import Valid'}</button>}</div>
       {!!uploadRows.length && <div className="table-wrap" style={{maxHeight:320, overflow:'auto'}}><table><thead><tr><th>Row</th><th>Nama</th><th>NRP</th><th>Email</th><th>Role</th><th>Site Code</th><th>Status</th></tr></thead><tbody>{uploadRows.map(r=><tr key={r.row}><td>{r.row}</td><td>{r.nama}</td><td>{r.nrp}</td><td>{r.email}</td><td>{r.role}</td><td>{r.site_code || '-'}</td><td>{r.status}</td></tr>)}</tbody></table></div>}
@@ -1935,12 +2062,30 @@ function FoodAdminPanel({ context, profile }){
         <button disabled={saving || !resetForm.access_id}>{saving ? 'Menyimpan...' : 'Ganti Password'}</button>
       </form>
     </Panel>
-    <Panel title="Row Data Akses Food Index" desc="Akses aktif akan muncul sebagai pilihan petugas tanda tangan inspeksi." action={<button className="secondary" onClick={()=>downloadXlsx('akses-user-food-index.xlsx', tableRows)}><Download size={16}/> Export</button>}>
-      <Table rows={tableRows} columns={['email','nama','nrp','role','db_role','site','status']} empty="Belum ada akses Food Index." />
+    <Panel title="Row Data Akses Food Index" desc="Akses dapat diedit atau dinonaktifkan langsung dari Administrator Food Index." action={<button className="secondary" onClick={()=>downloadXlsx('akses-user-food-index.xlsx', tableRows)}><Download size={16}/> Export</button>}>
+      <div className="table-toolbar"><div className="searchbox"><Search size={18}/><input value={accessSearch} onChange={e=>setAccessSearch(e.target.value)} placeholder="Search akses user..." /></div></div>
+      <div className="table-wrap" style={{maxHeight:520, overflow:'auto'}}>
+        <table>
+          <thead><tr><th>Email</th><th>Nama</th><th>NRP</th><th>Role</th><th>DB Role</th><th>Site</th><th>Status</th><th>Aksi</th></tr></thead>
+          <tbody>{filteredAccessRows.map(r => <tr key={r.id}>
+            <td>{r.users_profile?.email || '-'}</td>
+            <td>{r.users_profile?.nama || '-'}</td>
+            <td>{r.users_profile?.nrp || '-'}</td>
+            <td>{foodRoleFromAccess(r) || '-'}</td>
+            <td>{r.role || '-'}</td>
+            <td>{r.sites?.site_code || 'All Site'}</td>
+            <td><StatusPill value={r.status || '-'} /></td>
+            <td className="action-cell">
+              <button type="button" className="secondary small" onClick={()=>beginEditAccess(r)}>Edit</button>
+              <button type="button" className={isActiveFoodStatus(r.status) ? 'danger small' : 'secondary small'} disabled={saving} onClick={()=>toggleAccessStatus(r)}>{isActiveFoodStatus(r.status) ? 'Nonaktifkan' : 'Aktifkan'}</button>
+            </td>
+          </tr>)}</tbody>
+        </table>
+        {!filteredAccessRows.length && <p className="muted table-empty">Belum ada akses Food Index sesuai pencarian.</p>}
+      </div>
     </Panel>
   </div>
 }
-
 function FoodDashboard({ context }){
   const now = new Date()
   const [loading, setLoading] = useState(true)
@@ -1985,7 +2130,7 @@ function FoodDashboard({ context }){
         signaturePeriodEnd = endOfWeekSunday(signaturePeriodStart)
       } else if (yearFilter !== 'ALL' && monthFilter !== 'ALL') {
         signaturePeriodStart = `${yearFilter}-${monthFilter}-01`
-        signaturePeriodEnd = new Date(Number(yearFilter), Number(monthFilter), 0).toISOString().slice(0,10)
+        signaturePeriodEnd = endOfMonthLocal(yearFilter, monthFilter)
       } else if (yearFilter !== 'ALL') {
         signaturePeriodStart = `${yearFilter}-01-01`
         signaturePeriodEnd = `${yearFilter}-12-31`
@@ -2028,16 +2173,17 @@ function FoodDashboard({ context }){
         })
       ])
       const hideDashboardSite = (siteId, siteCode) => hiddenDashboardSiteIds.has(siteId) || isFoodDashboardHiddenSiteCode(siteCode)
+      // Simpan seluruh scope site di state. Filter periode hanya dilakukan sekali pada
+      // filteredTasks/filteredOuts supaya pilihan Week tidak kehilangan opsi lain
+      // setelah user memilih satu minggu.
       const dashboardTasks = dedupeFoodDashboardTasks(
-        (t || [])
-          .filter(row => !hideDashboardSite(row.site_id, row.sites?.site_code))
-          .filter(row => foodTaskMatchesDashboardPeriod(row, yearFilter, monthFilter, weekFilter))
+        (t || []).filter(row => !hideDashboardSite(row.site_id, row.sites?.site_code))
       )
       const dashboardOuts = (o || []).filter(row => {
         const task = row.food_findings?.food_weekly_tasks || {}
         if (hideDashboardSite(task.site_id, task.sites?.site_code)) return false
         if (adminCanSeeAll(context) && siteFilter && task.site_id !== siteFilter) return false
-        return outstandingMatchesDashboardPeriod(row, yearFilter, monthFilter, weekFilter)
+        return true
       })
       const dashboardVendors = (v || []).filter(row => isActiveFoodStatus(row.status)).filter(row => !hideDashboardSite(row.site_id, ''))
       const dashboardSignatures = (sigs || []).filter(row => {
@@ -2201,14 +2347,28 @@ function FoodDashboard({ context }){
   const monthOptions = ['ALL', ...Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0'))]
   const weekOptions = ['ALL']
   if (yearFilter !== 'ALL' && monthFilter !== 'ALL') {
-    for (let d = new Date(Number(yearFilter), Number(monthFilter) - 1, 1); d.getMonth() === Number(monthFilter) - 1; d.setDate(d.getDate() + 7)) {
-      const w = startOfWeekMonday(new Date(d))
+    for (let d = new Date(Number(yearFilter), Number(monthFilter) - 1, 1, 12, 0, 0, 0); d.getMonth() === Number(monthFilter) - 1; d.setDate(d.getDate() + 7)) {
+      const w = startOfWeekMonday(d)
       if (!weekOptions.includes(w)) weekOptions.push(w)
     }
   } else {
-    tasks.forEach(t => { if (t.week_start_date && !weekOptions.includes(t.week_start_date)) weekOptions.push(t.week_start_date) })
+    tasks
+      .filter(t => foodTaskMatchesDashboardPeriod(t, yearFilter, monthFilter, 'ALL'))
+      .forEach(t => {
+        const w = String(t.week_start_date || '').slice(0,10)
+        if (w && !weekOptions.includes(w)) weekOptions.push(w)
+      })
+    weekOptions.splice(1, weekOptions.length - 1, ...weekOptions.slice(1).sort())
   }
-  if (weekFilter !== 'ALL' && !weekOptions.includes(weekFilter)) weekOptions.push(weekFilter)
+
+  function handleMonthFilterChange(value){
+    setMonthFilter(value)
+    setWeekFilter('ALL')
+  }
+  function handleYearFilterChange(value){
+    setYearFilter(value)
+    setWeekFilter('ALL')
+  }
 
   return <div className="food-dashboard-v43">
     {error && <div className="error">{error}</div>}
@@ -2220,8 +2380,8 @@ function FoodDashboard({ context }){
       </div>
       <div className="dashboard-admin-filters">
         <label>Week<select value={weekFilter} onChange={e=>setWeekFilter(e.target.value)}>{weekOptions.map(w=><option key={w} value={w}>{w === 'ALL' ? 'All Week' : `${w} s/d ${endOfWeekSunday(w)}`}</option>)}</select></label>
-        <label>Bulan<select value={monthFilter} onChange={e=>setMonthFilter(e.target.value)}>{monthOptions.map(m=><option key={m} value={m}>{m === 'ALL' ? 'All Month' : m}</option>)}</select></label>
-        <label>Tahun<select value={yearFilter} onChange={e=>setYearFilter(e.target.value)}>{years.map(y=><option key={y} value={y}>{y === 'ALL' ? 'All Year' : y}</option>)}</select></label>
+        <label>Bulan<select value={monthFilter} onChange={e=>handleMonthFilterChange(e.target.value)}>{monthOptions.map(m=><option key={m} value={m}>{m === 'ALL' ? 'All Month' : m}</option>)}</select></label>
+        <label>Tahun<select value={yearFilter} onChange={e=>handleYearFilterChange(e.target.value)}>{years.map(y=><option key={y} value={y}>{y === 'ALL' ? 'All Year' : y}</option>)}</select></label>
         {adminCanSeeAll(context) && <label>Site<select value={siteFilter} onChange={e=>setSiteFilter(e.target.value)}><option value="">All Site</option>{sites.map(s=><option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}</select></label>}
         <button onClick={load}>⟳ Refresh</button>
       </div>
@@ -2292,10 +2452,27 @@ function FoodVendors({ context }){
   const [vendors, setVendors] = useState([])
   const [msg, setMsg] = useState('')
   const [error, setError] = useState('')
-  const [form, setForm] = useState({ site_id: context.site_id || '', vendor_name:'', status:'Aktif' })
+  const [form, setForm] = useState({ id:null, site_id: context.site_id || '', vendor_name:'', status:'Aktif' })
   const [preview, setPreview] = useState([])
+  const [vendorSearch, setVendorSearch] = useState('')
+  const editing = Boolean(form.id)
 
   useEffect(() => { load() }, [context?.id])
+  useEffect(() => {
+    if (!editing) return
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const onKeyDown = e => { if (e.key === 'Escape') resetVendorForm() }
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [editing])
+
+  function resetVendorForm(){
+    setForm({ id:null, site_id: context.site_id || '', vendor_name:'', status:'Aktif' })
+  }
   async function load(){
     setError('')
     try {
@@ -2304,16 +2481,62 @@ function FoodVendors({ context }){
       setVendors(data || [])
     } catch(e){ setError(e.message) }
   }
+  function editVendor(row){
+    setForm({
+      id: row.id,
+      site_id: row.site_id || context.site_id || '',
+      vendor_name: row.vendor_name || '',
+      status: isActiveFoodStatus(row.status) ? 'Aktif' : 'Nonaktif'
+    })
+    setMsg('')
+    setError('')
+  }
   async function saveVendor(e){
     e.preventDefault(); setMsg(''); setError('')
     try {
       if (!form.site_id) throw new Error('Site wajib dipilih.')
       if (!cleanText(form.vendor_name)) throw new Error('Nama vendor wajib diisi.')
+
+      const normalizedName = cleanText(form.vendor_name).toUpperCase().replace(/\s+/g, ' ')
+      const duplicate = vendors.find(v =>
+        String(v.id) !== String(form.id || '') &&
+        String(v.site_id || '') === String(form.site_id) &&
+        cleanText(v.vendor_name).toUpperCase().replace(/\s+/g, ' ') === normalizedName &&
+        isActiveFoodStatus(v.status) &&
+        isActiveFoodStatus(form.status)
+      )
+      if (duplicate) throw new Error('Vendor aktif dengan nama yang sama sudah ada pada site tersebut.')
+
       const row = { site_id:form.site_id, vendor_name:cleanText(form.vendor_name), status:form.status || 'Aktif' }
-      const { error } = await supabase.from('food_vendors').insert(row)
+      const query = form.id
+        ? supabase.from('food_vendors').update(row).eq('id', form.id)
+        : supabase.from('food_vendors').insert(row)
+      const { error } = await query
       if (error) throw error
-      setForm({ site_id: context.site_id || '', vendor_name:'', status:'Aktif' })
-      setMsg('Vendor catering berhasil disimpan.'); load()
+
+      setMsg(form.id ? 'Vendor catering berhasil diperbarui.' : 'Vendor catering berhasil disimpan.')
+      resetVendorForm()
+      await load()
+    } catch(e){ setError(e.message) }
+  }
+  async function toggleVendorStatus(row){
+    setMsg(''); setError('')
+    try {
+      const next = isActiveFoodStatus(row.status) ? 'Nonaktif' : 'Aktif'
+      if (next === 'Aktif') {
+        const duplicate = vendors.find(v =>
+          String(v.id) !== String(row.id) &&
+          String(v.site_id || '') === String(row.site_id || '') &&
+          cleanText(v.vendor_name).toUpperCase().replace(/\s+/g, ' ') === cleanText(row.vendor_name).toUpperCase().replace(/\s+/g, ' ') &&
+          isActiveFoodStatus(v.status)
+        )
+        if (duplicate) throw new Error('Vendor tidak dapat diaktifkan karena vendor aktif dengan nama yang sama sudah ada pada site tersebut.')
+      }
+      const { error } = await supabase.from('food_vendors').update({ status:next }).eq('id', row.id)
+      if (error) throw error
+      setMsg(`Vendor ${row.vendor_name || ''} berhasil ${next === 'Aktif' ? 'diaktifkan' : 'dinonaktifkan'}.`)
+      if (String(form.id) === String(row.id)) resetVendorForm()
+      await load()
     } catch(e){ setError(e.message) }
   }
   function downloadTemplate(){ downloadXlsx('template-master-vendor-catering.xlsx', [{ site_code:'BAYA', vendor_name:'Vendor Catering A', status:'Aktif' }]) }
@@ -2356,31 +2579,80 @@ function FoodVendors({ context }){
       if (!valid.length) throw new Error('Tidak ada data valid untuk diimport.')
       const { error } = await supabase.from('food_vendors').insert(valid)
       if (error) throw error
-      setMsg(`Import selesai: ${valid.length} vendor catering tersimpan.`); setPreview([]); load()
+      setMsg(`Import selesai: ${valid.length} vendor catering tersimpan.`); setPreview([]); await load()
     } catch(e){ setError(e.message) }
   }
 
   const rows = vendors.map(v => ({ site:v.sites?.site_code, vendor_code:v.vendor_code, vendor_name:v.vendor_name, status:v.status, created_at:v.created_at?.slice(0,10) }))
+  const vendorSearchKey = String(vendorSearch || '').trim().toLowerCase()
+  const filteredVendors = vendors.filter(v => !vendorSearchKey || [
+    v.sites?.site_code,
+    v.sites?.site_name,
+    v.vendor_code,
+    v.vendor_name,
+    v.status
+  ].some(value => String(value || '').toLowerCase().includes(vendorSearchKey)))
+
   return <div className="stack">
     {msg && <div className="success">{msg}</div>}{error && <div className="error">{error}</div>}
-    <Panel title="Tambah Vendor Catering" desc="Vendor catering khusus Food Index. Tidak memakai master vendor dari app lain.">
+    {!editing && <Panel title="Tambah Vendor Catering" desc="Vendor catering khusus Food Index. Tidak memakai master vendor dari app lain.">
       <form className="form-grid" onSubmit={saveVendor}>
         <label>Site<select value={form.site_id} onChange={e=>setForm({...form, site_id:e.target.value})} disabled={!adminCanSeeAll(context)}><option value="">Pilih site</option>{sites.map(s=><option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}</select></label>
         <label>Nama Vendor Catering<input value={form.vendor_name} onChange={e=>setForm({...form, vendor_name:e.target.value})} placeholder="Nama vendor catering" /></label>
         <label>Status<select value={form.status} onChange={e=>setForm({...form, status:e.target.value})}><option>Aktif</option><option>Nonaktif</option></select></label>
         <button>Simpan Vendor</button>
       </form>
-    </Panel>
+    </Panel>}
+
+    {editing && <div className="modal-backdrop food-modal-backdrop food-edit-backdrop" role="dialog" aria-modal="true" aria-labelledby="food-vendor-edit-title" onMouseDown={e=>{ if (e.target === e.currentTarget) resetVendorForm() }}>
+      <div className="modal-card food-edit-modal" onMouseDown={e=>e.stopPropagation()}>
+        <div className="modal-head food-modal-head">
+          <div>
+            <span className="modal-eyebrow">Master Vendor Catering</span>
+            <h3 id="food-vendor-edit-title">Edit Vendor Catering</h3>
+            <p>Ubah site, nama vendor, atau status vendor Food Index.</p>
+          </div>
+          <button type="button" className="icon close-btn" onClick={resetVendorForm} aria-label="Tutup modal"><X size={18}/></button>
+        </div>
+        <form className="food-edit-form" onSubmit={saveVendor}>
+          <div className="form-grid">
+            <label>Site<select value={form.site_id} onChange={e=>setForm({...form, site_id:e.target.value})} disabled={!adminCanSeeAll(context)}><option value="">Pilih site</option>{sites.map(s=><option key={s.id} value={s.id}>{s.site_code} - {s.site_name}</option>)}</select></label>
+            <label>Nama Vendor Catering<input value={form.vendor_name} onChange={e=>setForm({...form, vendor_name:e.target.value})} placeholder="Nama vendor catering" autoFocus /></label>
+            <label>Status<select value={form.status} onChange={e=>setForm({...form, status:e.target.value})}><option>Aktif</option><option>Nonaktif</option></select></label>
+          </div>
+          <div className="modal-actions inline-actions">
+            <button type="button" className="secondary" onClick={resetVendorForm}>Batal</button>
+            <button>Simpan Perubahan</button>
+          </div>
+        </form>
+      </div>
+    </div>}
     <Panel title="Import Vendor Catering Excel" desc="Kolom: site_code, vendor_name, status." action={<button className="secondary" onClick={downloadTemplate}><Download size={16}/> Download Template</button>}>
       <div className="import-row"><label className="upload-line"><Upload size={20}/><span>Upload Excel</span><input type="file" accept=".xlsx,.xls" onChange={e=>e.target.files?.[0] && parseVendorExcel(e.target.files[0])} hidden /></label>{preview.length > 0 && <button onClick={submitImport}>Submit Import Valid</button>}</div>
       {preview.length > 0 && <Table rows={preview.map(r=>({ row:r.row, site_code:r.site_code, vendor_name:r.vendor_name, status:r.status, valid:r.error || 'Valid' }))} />}
     </Panel>
-    <Panel title="Row Data Vendor Catering" action={<button onClick={()=>downloadXlsx('food-index-vendor-catering.xlsx', rows)}><Download size={16}/> Export</button>}>
-      <Table rows={rows} />
+    <Panel title="Row Data Vendor Catering" desc="Vendor dapat diedit, dinonaktifkan, atau diaktifkan kembali. Vendor Nonaktif tidak digunakan untuk pembentukan task Food Index berikutnya." action={<button onClick={()=>downloadXlsx('food-index-vendor-catering.xlsx', rows)}><Download size={16}/> Export</button>}>
+      <div className="table-toolbar"><div className="searchbox"><Search size={18}/><input value={vendorSearch} onChange={e=>setVendorSearch(e.target.value)} placeholder="Search vendor..." /></div></div>
+      <div className="table-wrap" style={{maxHeight:520, overflow:'auto'}}>
+        <table>
+          <thead><tr><th>Site</th><th>Vendor Code</th><th>Nama Vendor</th><th>Status</th><th>Created At</th><th>Aksi</th></tr></thead>
+          <tbody>{filteredVendors.map(v => <tr key={v.id}>
+            <td>{v.sites?.site_code || '-'}</td>
+            <td>{v.vendor_code || '-'}</td>
+            <td>{v.vendor_name || '-'}</td>
+            <td><StatusPill value={v.status || '-'} /></td>
+            <td>{v.created_at?.slice(0,10) || '-'}</td>
+            <td className="action-cell">
+              <button type="button" className="secondary small" onClick={()=>editVendor(v)}>Edit</button>
+              <button type="button" className={isActiveFoodStatus(v.status) ? 'danger small' : 'secondary small'} onClick={()=>toggleVendorStatus(v)}>{isActiveFoodStatus(v.status) ? 'Nonaktifkan' : 'Aktifkan'}</button>
+            </td>
+          </tr>)}</tbody>
+        </table>
+        {!filteredVendors.length && <p className="muted table-empty">Belum ada vendor sesuai pencarian.</p>}
+      </div>
     </Panel>
   </div>
 }
-
 function FoodParameters({ context }){
   const [rows, setRows] = useState([])
   const emptyForm = { id:null, parameter_code:'', category:'General', parameter_text:'', standard_parameter:'', hazard_code:'', behavior:'', sort_order:1, status:'Aktif' }
@@ -3078,6 +3350,8 @@ function FoodOutstanding({ context, profile }){
           food_weekly_tasks!inner(
             id,
             status,
+            approved_at,
+            approved_by,
             week_start_date,
             site_id,
             vendor_id,
@@ -3141,6 +3415,7 @@ function FoodOutstanding({ context, profile }){
     if (!hasPlan) return <button onClick={()=>openActionPlan(row)}>Isi Tindakan</button>
     if (outstandingStatus === 'Closed') return <span className="outstanding-action-badge closed"><CheckCircle2 size={14}/> Closed</span>
     if (outstandingStatus === 'Waiting Close Approval') return <span className="outstanding-action-badge waiting"><ShieldCheck size={14}/> Waiting Close Approval</span>
+    if (!taskIsApproved(row?.food_weekly_tasks)) return <span className="outstanding-action-badge waiting"><ShieldCheck size={14}/> Waiting Approval Inspeksi</span>
     return <button onClick={()=>openCloseOutstanding(row)}>Close Outstanding</button>
   }
 
@@ -3150,6 +3425,7 @@ function FoodOutstanding({ context, profile }){
     try {
       const hasPlan = cleanText(closeActive.food_findings?.corrective_action) && cleanText(closeActive.food_findings?.preventive_action) && cleanText(closeActive.food_findings?.due_date)
       if (!hasPlan) throw new Error('Corrective, Preventive Action, dan Due Date harus diisi dulu sebelum close outstanding.')
+      if (!taskIsApproved(closeActive.food_weekly_tasks)) throw new Error('Inspeksi harus di-approve Atasan Site terlebih dahulu sebelum Close Outstanding.')
       if (!closeForm.correctiveFile && !closeForm.correctiveUrl) throw new Error('Foto corrective wajib diupload.')
       if (!closeForm.preventiveFile && !closeForm.preventiveUrl) throw new Error('Foto preventive wajib diupload.')
       let correctiveUrl = closeForm.correctiveUrl || ''
@@ -3329,14 +3605,10 @@ function FoodApproval({ context, profile }){
       const { data, error } = await q
       if (error) throw error
       const loadedTasks = data || []
-      const completedCloseTasks = loadedTasks.filter(foodTaskCloseCycleCompleted)
-      if (completedCloseTasks.length) {
-        const { error: syncError } = await supabase.from('food_weekly_tasks')
-          .update({ status:'Approved', updated_at:new Date().toISOString() })
-          .in('id', completedCloseTasks.map(t => t.id))
-        if (syncError) console.warn('Food Index task status sync failed:', syncError.message)
-      }
-      setTasks(loadedTasks.filter(t => !foodTaskCloseCycleCompleted(t) && foodTaskEffectiveStatus(t) === 'Waiting Approval'))
+      // Query di atas sudah mengambil status Waiting Approval. Jangan menghilangkan task
+      // hanya karena finding sudah memiliki validated_at / outstanding pernah di-close.
+      // Approval inspeksi harus tetap eksplisit dilakukan Atasan Site.
+      setTasks(loadedTasks)
 
       let closeQ = supabase.from('food_outstandings')
         .select(`
@@ -3354,6 +3626,9 @@ function FoodApproval({ context, profile }){
           ),
           food_weekly_tasks!inner(
             id,
+            status,
+            approved_at,
+            approved_by,
             week_start_date,
             site_id,
             vendor_id,
@@ -3366,7 +3641,8 @@ function FoodApproval({ context, profile }){
       if (!adminCanSeeAll(context)) closeQ = closeQ.eq('food_weekly_tasks.site_id', context.site_id)
       const { data: closeData, error: closeError } = await closeQ
       if (closeError) throw closeError
-      setCloseRows(closeData || [])
+      // Close Outstanding hanya boleh masuk queue setelah approval inspeksi selesai.
+      setCloseRows((closeData || []).filter(row => taskIsApproved(row?.food_weekly_tasks)))
     } catch(e){ setError(e.message) }
     setLoading(false)
   }
@@ -3436,8 +3712,9 @@ function FoodApproval({ context, profile }){
     setSaving(true); setMsg(''); setError('')
     try {
       const now = new Date().toISOString()
-      const taskId = row.task_id || row.food_weekly_tasks?.id
       const findingId = row.finding_id || row.food_findings?.id
+      if (!taskIsApproved(row?.food_weekly_tasks)) throw new Error('Approval inspeksi belum selesai. Close Outstanding tidak dapat di-approve.')
+
       const { error } = await supabase.from('food_outstandings')
         .update({ status:'Closed', approved_by:profile?.id, approved_at:now, closed_at:now, updated_at:now })
         .eq('id', row.id)
@@ -3450,23 +3727,8 @@ function FoodApproval({ context, profile }){
         if (findingError) throw findingError
       }
 
-      if (taskId) {
-        const { data: taskOutstandings, error: outstandingError } = await supabase.from('food_outstandings')
-          .select('id, status, approved_at, closed_at')
-          .eq('task_id', taskId)
-        if (outstandingError) throw outstandingError
-
-        if ((taskOutstandings || []).length && (taskOutstandings || []).every(foodOutstandingIsClosed)) {
-          const { data: syncedTask, error: taskError } = await supabase.from('food_weekly_tasks')
-            .update({ status:'Approved', updated_at:now })
-            .eq('id', taskId)
-            .select('id, status')
-            .maybeSingle()
-          if (taskError) throw taskError
-          if (!syncedTask) throw new Error('Close outstanding tersimpan, tetapi status task Food Index gagal disinkronkan.')
-        }
-      }
-
+      // Status task tidak diubah di sini. Task sudah wajib Approved sebelum proses close,
+      // sehingga audit approved_by / approved_at tetap berasal dari Approval Inspeksi.
       setMsg('Close outstanding berhasil di-approve.')
       await load()
     } catch(e){ setError(e.message) }
