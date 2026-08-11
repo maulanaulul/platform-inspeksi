@@ -1674,6 +1674,26 @@ function foodTaskEffectiveStatus(task){
 }
 
 function taskIsApproved(task){ return foodTaskEffectiveStatus(task) === 'Approved' }
+
+// Legacy recovery guard: versi database lama pernah mengubah task yang sudah submit
+// menjadi Expired ketika minggu berganti. Task seperti ini tetap harus dapat direview
+// oleh Atasan Site selama belum pernah di-approve dan bukan hasil reject terbaru.
+function taskIsLegacyExpiredPendingApproval(task){
+  const status = normalizeFoodTaskStatusValue(task?.status)
+  if (status !== 'Expired' || !task?.submitted_at || task?.approved_at || task?.approved_by) return false
+
+  const submittedTime = Date.parse(task?.submitted_at || '') || 0
+  const rejectedTime = Date.parse(task?.rejected_at || '') || 0
+
+  // Jika reject terjadi setelah submit terakhir, GL memang masih harus memperbaiki/resubmit.
+  if (rejectedTime && rejectedTime >= submittedTime) return false
+  return true
+}
+
+function taskNeedsInspectionApproval(task){
+  return foodTaskEffectiveStatus(task) === 'Waiting Approval' || taskIsLegacyExpiredPendingApproval(task)
+}
+
 function taskHasInspectionData(task){
   const answers = task?.food_inspection_answers || []
   const status = foodTaskEffectiveStatus(task)
@@ -3599,15 +3619,17 @@ function FoodApproval({ context, profile }){
           ),
           food_outstandings(id, status, approved_at, closed_at)
         `)
-        .eq('status', 'Waiting Approval')
+        // Hardening lintas minggu: ikut baca Expired legacy yang sebenarnya sudah submit.
+        // Filter detail di bawah memastikan task Expired yang tidak pernah submit tetap tidak muncul.
+        .in('status', ['Waiting Approval','Expired'])
+        .not('submitted_at', 'is', null)
         .order('submitted_at', { ascending:true })
       if (!adminCanSeeAll(context)) q = q.eq('site_id', context.site_id)
       const { data, error } = await q
       if (error) throw error
-      const loadedTasks = data || []
-      // Query di atas sudah mengambil status Waiting Approval. Jangan menghilangkan task
-      // hanya karena finding sudah memiliki validated_at / outstanding pernah di-close.
-      // Approval inspeksi harus tetap eksplisit dilakukan Atasan Site.
+      const loadedTasks = (data || []).filter(taskNeedsInspectionApproval)
+      // Waiting Approval normal + recovery untuk data legacy yang telanjur Expired
+      // setelah minggu berganti. Task Expired tanpa submitted_at tidak pernah dimunculkan.
       setTasks(loadedTasks)
 
       let closeQ = supabase.from('food_outstandings')
@@ -3757,7 +3779,7 @@ function FoodApproval({ context, profile }){
     site: t.sites?.site_code || '-',
     vendor: t.food_vendors?.vendor_name || '-',
     minggu: `${t.week_start_date} s/d ${t.week_end_date}`,
-    status: foodTaskEffectiveStatus(t),
+    status: taskIsLegacyExpiredPendingApproval(t) ? 'Waiting Approval' : foodTaskEffectiveStatus(t),
     submitted_at: t.submitted_at?.slice(0,16)?.replace('T',' ') || '-',
     jumlah_temuan: (t.food_inspection_answers || []).filter(a => Number(a.score) === 0).length,
     action_plan_ready: isTaskReady(t) ? 'Siap Approval' : 'Belum Lengkap'
@@ -3770,7 +3792,7 @@ function FoodApproval({ context, profile }){
   return <div className="stack">
     {msg && <div className="success">{msg}</div>}{error && <div className="error">{error}</div>}
     <Panel title="Approval Inspeksi Food Index" desc="Approve hanya untuk inspeksi yang sudah submit. Jika ada temuan, corrective, preventive, dan due date harus sudah diisi GL dari menu Outstanding." action={<button className="secondary" onClick={load} disabled={loading}>{loading ? 'Memuat...' : 'Refresh'}</button>}>
-      {loading ? <p>Memuat approval...</p> : <div className="table-wrap" style={{maxHeight:520, overflow:'auto'}}><table><thead><tr><th>Site</th><th>Vendor</th><th>Minggu</th><th>Submit</th><th>Temuan</th><th>Action Plan</th><th>Aksi</th></tr></thead><tbody>{tasks.map(t => <tr key={t.id}><td>{t.sites?.site_code || '-'}</td><td>{t.food_vendors?.vendor_name || '-'}</td><td>{t.week_start_date} s/d {t.week_end_date}</td><td>{t.submitted_at?.slice(0,16)?.replace('T',' ') || '-'}</td><td>{(t.food_inspection_answers || []).filter(a => Number(a.score) === 0).length}</td><td>{isTaskReady(t) ? <StatusPill value="Approved" /> : <StatusPill value="Need Action Plan" />}</td><td><button onClick={()=>openReview(t)}>Review</button></td></tr>)}</tbody></table>{!tasks.length && <p className="muted table-empty">Belum ada inspeksi yang menunggu approval.</p>}</div>}
+      {loading ? <p>Memuat approval...</p> : <div className="table-wrap" style={{maxHeight:520, overflow:'auto'}}><table><thead><tr><th>Site</th><th>Vendor</th><th>Minggu</th><th>Submit</th><th>Temuan</th><th>Action Plan</th><th>Aksi</th></tr></thead><tbody>{tasks.map(t => <tr key={t.id}><td>{t.sites?.site_code || '-'}</td><td>{t.food_vendors?.vendor_name || '-'}</td><td>{t.week_start_date} s/d {t.week_end_date}</td><td>{t.submitted_at?.slice(0,16)?.replace('T',' ') || '-'}</td><td>{(t.food_inspection_answers || []).filter(a => Number(a.score) === 0).length}</td><td>{isTaskReady(t) ? <StatusPill value="Complete, Need Approve" /> : <StatusPill value="Need Action Plan" />}</td><td><button onClick={()=>openReview(t)}>Review</button></td></tr>)}</tbody></table>{!tasks.length && <p className="muted table-empty">Belum ada inspeksi yang menunggu approval.</p>}</div>}
     </Panel>
     <Panel title="Approval Close Outstanding" desc="Approve close outstanding setelah GL upload foto corrective dan preventive." action={<button className="secondary" onClick={load} disabled={loading}>{loading ? 'Memuat...' : 'Refresh'}</button>}>
       {loading ? <p>Memuat approval close outstanding...</p> : <div className="table-wrap" style={{maxHeight:420, overflow:'auto'}}><table><thead><tr><th>Site</th><th>Vendor</th><th>Minggu</th><th>Parameter</th><th>Corrective</th><th>Preventive</th><th>Due Date</th><th>Foto Corrective</th><th>Foto Preventive</th><th>Aksi</th></tr></thead><tbody>{closeRows.map(r => {

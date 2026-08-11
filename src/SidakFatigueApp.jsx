@@ -1675,16 +1675,38 @@ function AdminPanel({ context, profile }) {
 function UserExistingSearch({ profiles, value, onPick }){
   const [open, setOpen] = useState(false)
   const [q, setQ] = useState('')
-  const selected = profiles.find(p => p.id === value)
-  const list = profiles.filter(p => `${p.nama || ''} ${p.email || ''} ${p.nrp || ''}`.toLowerCase().includes(q.toLowerCase())).slice(0, 50)
+  const selected = profiles.find(p => String(p.id) === String(value))
+  const keyword = q.trim().toLowerCase()
+  // Profiles dari loader diurutkan berdasarkan created_at DESC supaya user yang baru dibuat
+  // langsung terlihat saat modal dibuka. Search tetap dilakukan pada seluruh data yang sudah dimuat.
+  const list = profiles
+    .filter(p => !keyword || `${p.nama || ''} ${p.email || ''} ${p.nrp || ''}`.toLowerCase().includes(keyword))
+    .slice(0, 100)
   function choose(id){ onPick(id); setOpen(false); setQ('') }
   return <label>User Existing
     <div className="user-picker-field">
       <button type="button" className="secondary user-picker-trigger" onClick={()=>setOpen(true)}>{selected ? `${selected.nama || selected.email} · ${selected.email || ''}${selected.nrp ? ' · ' + selected.nrp : ''}` : 'Cari dan pilih user existing'}</button>
       {selected && <button type="button" className="ghost-btn small" onClick={()=>onPick('')}>Clear</button>}
     </div>
-    {open && <div className="modal-backdrop" onMouseDown={()=>setOpen(false)}><div className="modal-card user-picker-modal" onMouseDown={e=>e.stopPropagation()}><div className="modal-head"><div><h3>Pilih User Existing</h3><p>Cari berdasarkan nama, email, atau NRP.</p></div><button type="button" className="secondary small" onClick={()=>setOpen(false)}>Tutup</button></div><div className="table-search"><Search size={16}/><input autoFocus placeholder="Ketik nama / email / NRP..." value={q} onChange={e=>setQ(e.target.value)} /></div><div className="user-picker-list">{list.map(p=><button type="button" key={p.id} onClick={()=>choose(p.id)}><b>{p.nama || p.email}</b><span>{p.email}{p.nrp ? ` · ${p.nrp}` : ''}</span></button>)}{!list.length && <p className="muted">User tidak ditemukan.</p>}</div></div></div>}
+    {open && <div className="modal-backdrop" onMouseDown={()=>setOpen(false)}><div className="modal-card user-picker-modal" onMouseDown={e=>e.stopPropagation()}><div className="modal-head"><div><h3>Pilih User Existing</h3><p>User terbaru ditampilkan paling atas. Cari berdasarkan nama, email, atau NRP.</p></div><button type="button" className="secondary small" onClick={()=>setOpen(false)}>Tutup</button></div><div className="table-search"><Search size={16}/><input autoFocus placeholder="Ketik nama / email / NRP..." value={q} onChange={e=>setQ(e.target.value)} /></div><div className="user-picker-list">{list.map(p=><button type="button" key={p.id} onClick={()=>choose(p.id)}><b>{p.nama || p.email}</b><span>{p.email}{p.nrp ? ` · ${p.nrp}` : ''}</span></button>)}{!list.length && <p className="muted">User tidak ditemukan.</p>}</div></div></div>}
   </label>
+}
+
+async function fetchAllAdminRows(buildQuery, pageSize=1000){
+  const all = []
+  for(let from=0;;from+=pageSize){
+    const { data, error } = await buildQuery().range(from, from + pageSize - 1)
+    if(error) throw error
+    const rows = data || []
+    all.push(...rows)
+    if(rows.length < pageSize) break
+  }
+  return all
+}
+
+function mergeByIdNewestFirst(rows, item){
+  if(!item?.id) return rows || []
+  return [item, ...(rows || []).filter(r => String(r.id) !== String(item.id))]
 }
 
 function AccessMapping({ context, profile }){
@@ -1701,18 +1723,28 @@ function AccessMapping({ context, profile }){
   const [existingBulkPreview,setExistingBulkPreview]=useState([])
   useEffect(()=>{load()},[])
   async function load(){
-    const [{data:p},{data:a},{data:s},{data:m}] = await Promise.all([
-      supabase.from('users_profile').select('*').neq('status','Nonaktif').order('nama'),
-      supabase.from('applications').select('*').eq('status','Aktif').order('app_name'),
-      supabase.from('sites').select('*').eq('status','Aktif').order('site_code'),
-      supabase.from('user_app_access').select('*, users_profile(id,nama,email,nrp,status), applications(id,app_name,app_code), sites(id,site_name,site_code)').order('created_at',{ascending:false})
-    ])
-    const profilesData=p||[], appsData=a||[], sitesData=s||[], mapData=m||[]
-    setProfiles(profilesData); setApps(appsData); setSites(sitesData); setAccessRows(mapData)
-    const firstApp=appsData[0]?.id || ''
-    const firstSite=sitesData[0]?.id || ''
-    setNewUser(f=>({ ...f, app_id:f.app_id || firstApp, site_id:f.site_id || firstSite }))
-    setExisting(f=>({ ...f, app_id:f.app_id || firstApp, site_id:f.site_id || firstSite }))
+    try{
+      // Supabase/PostgREST membatasi response default. Ambil seluruh page agar user baru
+      // tidak hilang hanya karena jumlah profile sudah banyak. Profile terbaru diletakkan di atas.
+      const [profilesData, appsData, sitesData, mapData] = await Promise.all([
+        fetchAllAdminRows(()=>supabase.from('users_profile').select('*').or('status.is.null,status.neq.Nonaktif').order('created_at',{ascending:false})),
+        fetchAllAdminRows(()=>supabase.from('applications').select('*').eq('status','Aktif').order('app_name')),
+        fetchAllAdminRows(()=>supabase.from('sites').select('*').eq('status','Aktif').order('site_code')),
+        fetchAllAdminRows(()=>supabase.from('user_app_access').select('*, users_profile(id,nama,email,nrp,status,created_at), applications(id,app_name,app_code), sites(id,site_name,site_code)').order('created_at',{ascending:false}))
+      ])
+      setProfiles(profilesData || [])
+      setApps(appsData || [])
+      setSites(sitesData || [])
+      setAccessRows(mapData || [])
+      const firstApp=appsData[0]?.id || ''
+      const firstSite=sitesData[0]?.id || ''
+      setNewUser(f=>({ ...f, app_id:f.app_id || firstApp, site_id:f.site_id || firstSite }))
+      setExisting(f=>({ ...f, app_id:f.app_id || firstApp, site_id:f.site_id || firstSite }))
+      return { profilesData, appsData, sitesData, mapData }
+    }catch(err){
+      setMessage(`Gagal refresh Admin Panel: ${err.message || String(err)}`)
+      return null
+    }
   }
   function normalizeEmail(v){ return cleanText(v).toLowerCase() }
   function resetNewUser(){ setNewUser({ nama:'', nrp:'', email:'', password:'', app_id:apps[0]?.id||'', role:'GL', site_id:sites[0]?.id||'' }) }
@@ -1738,7 +1770,27 @@ function AccessMapping({ context, profile }){
       if(!data?.ok) throw new Error('Admin create user tidak mengembalikan status OK dari Edge Function.')
       if(!data?.auth_user_id) throw new Error('User belum terbuat di Supabase Auth. Deploy ulang Edge Function admin-create-user versi terbaru lalu coba lagi.')
       setMessage(`User ${payload.email} berhasil dibuat di Supabase Auth dan dimapping. Auth ID: ${data.auth_user_id}`)
-      resetNewUser(); await load()
+      resetNewUser()
+      await load()
+      // Edge Function sudah mengembalikan profile + mapping yang sukses dibuat. Merge kembali
+      // setelah refresh untuk menghindari jeda read/caching dan memastikan user langsung terlihat.
+      if(data?.profile?.id){
+        setProfiles(prev=>mergeByIdNewestFirst(prev, data.profile))
+      }
+      if(data?.mapping?.id){
+        const app = apps.find(a=>String(a.id)===String(payload.app_id)) || null
+        const site = sites.find(s=>String(s.id)===String(payload.site_id || '')) || null
+        const hydratedMapping = {
+          ...data.mapping,
+          user_id:data.profile?.id || data.mapping.user_id,
+          app_id:payload.app_id,
+          site_id:payload.site_id || null,
+          users_profile:data.profile || null,
+          applications:app,
+          sites:site
+        }
+        setAccessRows(prev=>mergeByIdNewestFirst(prev, hydratedMapping))
+      }
     }catch(err){ setMessage(err.message || String(err)) }
     finally{ setLoading(false) }
   }
@@ -1749,12 +1801,32 @@ function AccessMapping({ context, profile }){
       if(!existing.app_id || !existing.role) throw new Error('Aplikasi dan role wajib dipilih')
       const payload={ user_id:existing.user_id, app_id:existing.app_id, role:existing.role, site_id:existing.site_id || null, status:'Aktif' }
       if(findAccessDuplicate(payload, editing?.id)) throw new Error('Mapping akses ini sudah ada. User, aplikasi, role, dan site tidak boleh double.')
-      let error
-      if(editing){ ({ error } = await supabase.from('user_app_access').update(payload).eq('id',editing.id)) }
-      else { ({ error } = await supabase.from('user_app_access').insert(payload)) }
+
+      const selectRow = '*, users_profile(id,nama,email,nrp,status,created_at), applications(id,app_name,app_code), sites(id,site_name,site_code)'
+      let savedRow, error
+      if(editing){
+        ({ data:savedRow, error } = await supabase.from('user_app_access').update(payload).eq('id',editing.id).select(selectRow).single())
+      }else{
+        ({ data:savedRow, error } = await supabase.from('user_app_access').insert(payload).select(selectRow).single())
+      }
       if(error) throw error
-      setMessage(editing ? 'Mapping akses berhasil diupdate.' : 'Mapping akses user existing berhasil disimpan.')
-      resetExisting(); await load()
+
+      // Update tabel langsung dari row hasil INSERT/UPDATE. Jadi nama user tidak perlu
+      // menunggu refresh kedua untuk muncul di Row Data Mapping Akses.
+      if(savedRow){
+        setAccessRows(prev=>mergeByIdNewestFirst(prev, savedRow))
+        if(savedRow.users_profile?.id){
+          setProfiles(prev=>mergeByIdNewestFirst(prev, savedRow.users_profile))
+        }
+      }
+      setMessage(editing ? 'Mapping akses berhasil diupdate.' : 'Mapping akses user existing berhasil disimpan dan langsung ditampilkan.')
+      resetExisting()
+      await load()
+      // Pertahankan row sukses di posisi teratas walau refresh browser/database sempat terlambat.
+      if(savedRow){
+        setAccessRows(prev=>mergeByIdNewestFirst(prev, savedRow))
+        if(savedRow.users_profile?.id) setProfiles(prev=>mergeByIdNewestFirst(prev, savedRow.users_profile))
+      }
     }catch(err){ setMessage(err.message || String(err)) }
     finally{ setLoading(false) }
   }
