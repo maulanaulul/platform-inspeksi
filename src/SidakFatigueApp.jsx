@@ -1338,7 +1338,71 @@ function FatiguePlans({ context, profile }) {
     if(error) setMessage(error.message)
     else { setMessage(`Import plan berhasil: ${payload.length} baris.`); setPreview([]); load() }
   }
-  const rows = plans.map(p => ({ id:p.id, bulan:p.bulan, tahun:p.tahun, driver:p.drivers?.nama_driver, nrp:p.drivers?.nrp_driver, site:p.sites?.site_name, status:p.status }))
+  const administratorCanDeletePlan = canAdmin(context.role)
+
+  async function deletePlannedPlan(plan){
+    setMessage('')
+    if (!administratorCanDeletePlan) {
+      setMessage('Hanya Administrator yang dapat menghapus Plan Sidak.')
+      return
+    }
+    if (String(plan?.status || '').trim().toLowerCase() !== 'planned') {
+      setMessage('Plan Sidak hanya dapat dihapus selama status masih Planned.')
+      return
+    }
+
+    const driverName = plan?.drivers?.nama_driver || plan?.drivers?.nrp_driver || 'driver ini'
+    const siteName = plan?.sites?.site_code || plan?.sites?.site_name || '-'
+    if (!window.confirm(`Hapus Plan Sidak ${driverName} (${siteName}) bulan ${plan?.bulan}/${plan?.tahun}? Data yang sudah masuk proses inspeksi tidak akan dapat dihapus.`)) return
+
+    try {
+      // Safety guard: walaupun status masih tertulis Planned, jangan hapus bila sudah
+      // ada record inspeksi yang terhubung ke plan ini.
+      const { data: linkedInspections, error: linkedError } = await supabase
+        .from('fatigue_inspections')
+        .select('id')
+        .eq('plan_id', plan.id)
+        .limit(1)
+      if (linkedError) throw linkedError
+      if ((linkedInspections || []).length) {
+        setMessage('Plan tidak dapat dihapus karena sudah memiliki data inspeksi.')
+        await load()
+        return
+      }
+
+      // Guard status di query delete mencegah race condition: bila plan sudah berubah
+      // dari Planned ke In Review/Done, record tidak akan ikut terhapus.
+      const { data, error } = await supabase
+        .from('fatigue_plans')
+        .delete()
+        .eq('id', plan.id)
+        .eq('status', 'Planned')
+        .select('id')
+
+      if (error) throw error
+      if (!(data || []).length) {
+        setMessage('Plan tidak dihapus. Status kemungkinan sudah berubah dari Planned atau akses delete ditolak.')
+        await load()
+        return
+      }
+
+      setMessage('Plan Sidak berhasil dihapus.')
+      await load()
+    } catch (e) {
+      setMessage(e.message || 'Gagal menghapus Plan Sidak.')
+    }
+  }
+
+  const rows = plans.map(p => ({
+    id:p.id,
+    bulan:p.bulan,
+    tahun:p.tahun,
+    driver:p.drivers?.nama_driver,
+    nrp:p.drivers?.nrp_driver,
+    site:p.sites?.site_name,
+    status:p.status,
+    ...(administratorCanDeletePlan ? { aksi:'' } : {})
+  }))
   return <div className="stack">
     <Panel title="Buat Plan Sidak Bulanan" desc="Planning berbasis objek driver dalam bulan berjalan, bukan per tanggal.">
       <form className="form-grid" onSubmit={save}>
@@ -1354,8 +1418,16 @@ function FatiguePlans({ context, profile }) {
       <div className="import-actions"><button className="secondary" onClick={()=>downloadTemplate('template-plan-sidak.xlsx', templateRows('plan'))}><Download size={16}/> Download Template Excel</button><label className="upload-line"><FileSpreadsheet/> Upload Excel<input type="file" accept=".xlsx,.xls" onChange={e=>previewPlans(e.target.files?.[0])}/></label>{preview.length>0 && <button onClick={submitPlanImport} disabled={!preview.some(r=>!r.error)}>Submit {preview.filter(r=>!r.error).length} Baris Valid</button>}</div>
       {preview.length>0 && <PreviewTable rows={preview}/>} 
     </Panel>
-    <Panel title="Row Data Plan Sidak" desc="Semua objek driver yang direncanakan untuk inspeksi. Status In Review/Done tidak tampil lagi di menu Mulai Inspeksi." action={<button onClick={()=>downloadXlsx('plan-sidak-fatigue.xlsx', rows)}><Download size={16}/> Export Excel</button>}>
-      <DataTable rows={rows}/>
+    <Panel title="Row Data Plan Sidak" desc={administratorCanDeletePlan ? 'Semua objek driver yang direncanakan untuk inspeksi. Administrator dapat menghapus plan hanya selama status masih Planned.' : 'Semua objek driver yang direncanakan untuk inspeksi. Status In Review/Done tidak tampil lagi di menu Mulai Inspeksi.'} action={<button onClick={()=>downloadXlsx('plan-sidak-fatigue.xlsx', rows.map(({aksi,...r})=>r))}><Download size={16}/> Export Excel</button>}>
+      <DataTable
+        rows={rows}
+        customActions={administratorCanDeletePlan ? (idx => {
+          const plan = plans[idx]
+          return String(plan?.status || '').trim().toLowerCase() === 'planned'
+            ? <button className="danger small" onClick={()=>deletePlannedPlan(plan)}>Delete</button>
+            : <span className="muted">-</span>
+        }) : undefined}
+      />
     </Panel>
   </div>
 }
