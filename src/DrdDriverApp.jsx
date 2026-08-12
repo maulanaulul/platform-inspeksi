@@ -82,7 +82,13 @@ function isIsoDateString(v){
 }
 function normEmail(v){ return clean(v).toLowerCase() }
 function isValidEmail(v){ const e = normEmail(v); return !e || /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/.test(e) }
-function today(){ return new Date().toISOString().slice(0,10) }
+function today(){
+  // Gunakan tanggal kalender lokal browser, bukan UTC.
+  // Penting untuk site Indonesia agar status onsite tidak bergeser satu hari
+  // pada pukul 00:00-06:59 WIB/WITA/WIT.
+  const d = new Date()
+  return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`
+}
 function months(n){ const d = new Date(); d.setMonth(d.getMonth()+n); return d.toISOString().slice(0,10) }
 function dateOnly(value){ return value ? String(value).slice(0,10) : '' }
 function addMonthsIso(baseDate, count){
@@ -133,7 +139,14 @@ function isAdmin(w){ return ROLE_ADMIN.includes(w?.role) }
 function isGL(w){ return w?.role === 'GL' }
 function isDriver(w){ return w?.role === 'Driver' }
 function isExpired(date){ return !!date && date < today() }
-function isOnsiteDue(p){ return !!p?.onsite_date && p.onsite_date <= today() && p.status !== 'Closed' }
+function isOnsiteDue(p, referenceDate=today()){
+  const onsite = excelDateToIso(p?.onsite_date)
+  return !!onsite && onsite === referenceDate && p?.status !== 'Closed'
+}
+function isOnsiteOverdue(p, referenceDate=today()){
+  const onsite = excelDateToIso(p?.onsite_date)
+  return !!onsite && onsite < referenceDate && p?.status !== 'Closed'
+}
 function exportXlsx(name, rows){ const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows?.length ? rows : [{}]), 'Data'); XLSX.writeFile(wb, name) }
 function templateXlsx(name, rows, dateColumns=[]){
   const prepared = (rows || []).map(row => {
@@ -422,13 +435,28 @@ function Dashboard({work}){
     periodsByDriver.get(key).push(p)
   })
   function currentCyclePeriod(d){
-    const rows=(periodsByDriver.get(String(d.id)) || []).filter(p=>{
-      const created=dateOnly(p.created_at)
-      return !created || created<=referenceDate
-    })
-    return rows.find(p=>String(p.masa_dinas_end_date||'')===String(d.end_masa_dinas||''))
-      || rows.find(p=>!p.masa_dinas_end_date && p.status!=='Closed')
-      || null
+    // V18 FIX: status "Butuh Input Periode" harus memakai kondisi periode yang
+    // benar-benar sudah tersimpan saat ini, bukan snapshot berdasarkan created_at.
+    // Sebelumnya Dashboard dengan tanggal acuan lama (mis. 31-Jul) mengabaikan
+    // periode yang diinput sesudah tanggal acuan, sehingga KPI masih menunjukkan
+    // Butuh Input Periode padahal driver sudah tidak ada di Outstanding Periode Cuti.
+    // Tanggal acuan tetap dipakai di inductionState untuk menentukan Menunggu Onsite,
+    // Open Hari Ini, Overdue, dan Completed.
+    const rows=periodsByDriver.get(String(d.id)) || []
+    const currentEnd = excelDateToIso(d.end_masa_dinas)
+
+    // Prioritas utama: periode memang dibuat untuk siklus end_masa_dinas saat ini.
+    const exact = rows.find(p=>excelDateToIso(p.masa_dinas_end_date) === currentEnd)
+    if(exact) return exact
+
+    // Guard data legacy: periode lama yang masa_dinas_end_date-nya NULL tidak boleh
+    // otomatis dianggap sebagai periode siklus terbaru. Hanya terima periode Open
+    // yang tanggal cutinya berada pada/setelah end masa dinas siklus saat ini.
+    return rows.find(p=>{
+      if(p.masa_dinas_end_date || p.status === 'Closed') return false
+      const cuti = excelDateToIso(p.cuti_start_date)
+      return !!currentEnd && !!cuti && cuti >= currentEnd
+    }) || null
   }
   function latestClosedPeriodAt(d){
     const rows=periodsByDriver.get(String(d.id)) || []
@@ -439,19 +467,31 @@ function Dashboard({work}){
     const closedPeriod=latestClosedPeriodAt(d)
     const endMasaDinas=excelDateToIso(d.end_masa_dinas)
     const expired=!!endMasaDinas && endMasaDinas<referenceDate
+    const base = {completed:false,open:false,needsPeriod:false,waitingOnsite:false,overdue:false,currentPeriod,closedPeriod,expired}
 
     // Setelah induksi lulus, driver tetap Completed selama masa dinas aktif.
-    // Begitu end_masa_dinas terlewati, status kembali Open untuk siklus berikutnya.
     if(closedPeriod && endMasaDinas && !expired){
-      return {completed:true,open:false,currentPeriod:currentPeriod||closedPeriod,closedPeriod,status:'Completed - Masa Dinas Aktif',expired:false}
+      return {...base,completed:true,currentPeriod:currentPeriod||closedPeriod,status:'Completed - Masa Dinas Aktif',expired:false}
     }
+
     if(expired){
-      if(!currentPeriod) return {completed:false,open:true,currentPeriod:null,closedPeriod,status:'Open - Butuh Input Periode',expired:true}
+      // Belum ada periode bukan berarti induksi sudah Open. Driver harus muncul dulu
+      // pada Outstanding Input Periode Cuti agar admin bisa menentukan tanggal onsite.
+      if(!currentPeriod) return {...base,needsPeriod:true,currentPeriod:null,status:'Butuh Input Periode'}
+
       const onsite=excelDateToIso(currentPeriod.onsite_date)
-      if(!onsite || onsite>referenceDate) return {completed:false,open:true,currentPeriod,closedPeriod,status:'Open - Menunggu Onsite',expired:true}
-      return {completed:false,open:true,currentPeriod,closedPeriod,status:'Open - Wajib Induksi',expired:true}
+      if(!onsite) return {...base,needsPeriod:true,status:'Butuh Input Onsite'}
+
+      // Sesuai rule operasional: Induksi Open HANYA pada tanggal onsite = tanggal acuan.
+      if(onsite>referenceDate) return {...base,waitingOnsite:true,status:'Menunggu Onsite'}
+      if(onsite===referenceDate) return {...base,open:true,status:'Open - Wajib Induksi'}
+
+      // Jika tanggal onsite sudah terlewat tetapi period belum Closed, tetap terlihat
+      // sebagai pekerjaan tertunda, tetapi tidak dihitung sebagai "Open hari ini".
+      return {...base,overdue:true,status:'Overdue - Induksi Belum Selesai'}
     }
-    return {completed:false,open:false,currentPeriod,closedPeriod,status:endMasaDinas?'Belum Wajib':'End Masa Dinas Belum Diisi',expired:false}
+
+    return {...base,status:endMasaDinas?'Belum Wajib':'End Masa Dinas Belum Diisi',expired:false}
   }
 
   const drdOk=drivers.filter(d=>isDrdCompletedAt(latestPassedDrd.get(d.id),referenceDate)).length
@@ -459,8 +499,12 @@ function Dashboard({work}){
   const inductionStates=drivers.map(d=>({driver:d,...inductionState(d)}))
   const completedInduksi=inductionStates.filter(x=>x.completed).length
   const openInduksi=inductionStates.filter(x=>x.open).length
-  const openPeriodInput=inductionStates.filter(x=>x.open&&!x.currentPeriod).length
-  const inductionTarget=completedInduksi+openInduksi
+  const openPeriodInput=inductionStates.filter(x=>x.needsPeriod).length
+  const waitingOnsiteInduksi=inductionStates.filter(x=>x.waitingOnsite).length
+  const overdueInduksi=inductionStates.filter(x=>x.overdue).length
+  // Target hanya yang sudah completed + wajib hari ini + overdue. Driver yang masih
+  // menunggu onsite / belum punya periode belum masuk target pelaksanaan induksi.
+  const inductionTarget=completedInduksi+openInduksi+overdueInduksi
   const inductionAch=inductionTarget?Math.round(completedInduksi/inductionTarget*100):100
   const expiredDrivers=inductionStates.filter(x=>x.expired).map(x=>x.driver)
 
@@ -473,19 +517,23 @@ function Dashboard({work}){
     bySite[code].total++
     if(isDrdCompletedAt(latestPassedDrd.get(d.id),referenceDate)) bySite[code].drd_completed++
 
-    bySiteInduksi[code]??={site:code,site_name:siteName,total_driver:0,target_induksi:0,open_induksi:0,completed_induksi:0,butuh_input_periode:0,menunggu_onsite:0,wajib_induksi:0,achievement_induksi:100}
+    bySiteInduksi[code]??={site:code,site_name:siteName,total_driver:0,target_induksi:0,open_induksi:0,completed_induksi:0,butuh_input_periode:0,menunggu_onsite:0,wajib_induksi:0,overdue_induksi:0,achievement_induksi:100}
     const state=inductionState(d)
     bySiteInduksi[code].total_driver++
     if(state.completed){
       bySiteInduksi[code].completed_induksi++
       bySiteInduksi[code].target_induksi++
     }
+    if(state.needsPeriod) bySiteInduksi[code].butuh_input_periode++
+    if(state.waitingOnsite) bySiteInduksi[code].menunggu_onsite++
     if(state.open){
       bySiteInduksi[code].open_induksi++
+      bySiteInduksi[code].wajib_induksi++
       bySiteInduksi[code].target_induksi++
-      if(!state.currentPeriod) bySiteInduksi[code].butuh_input_periode++
-      else if(!state.currentPeriod.onsite_date || state.currentPeriod.onsite_date>referenceDate) bySiteInduksi[code].menunggu_onsite++
-      else bySiteInduksi[code].wajib_induksi++
+    }
+    if(state.overdue){
+      bySiteInduksi[code].overdue_induksi++
+      bySiteInduksi[code].target_induksi++
     }
   })
   Object.values(bySite).forEach(x=>{ x.drd_open=x.total-x.drd_completed; x.achievement=x.total?Math.round(x.drd_completed/x.total*100):0 })
@@ -524,14 +572,14 @@ function Dashboard({work}){
     <Panel title="Dashboard DRD per Site" desc="Status dihitung pada tanggal acuan. Driver tetap Completed selama DRD lulus masih berada dalam masa berlaku enam bulan, walaupun tanggal tes berada di luar rentang filter." action={<div className="row-actions"><button onClick={()=>exportXlsx('achievement-drd-site.xlsx',siteRows)}><Download size={16}/> Export Summary</button><button className="secondary" onClick={()=>exportXlsx(detailDriverFileName,detailDriverRows)}><Download size={16}/> Export Detail Driver</button></div>}>
       <div className="site-chart">{siteRows.map(r=><div className="site-bar" key={r.site}><div className="site-meta"><b>{r.site}</b><span>{r.drd_completed}/{r.total} · {r.achievement}%</span></div><div className="bar"><span style={{width:`${Math.min(r.achievement,100)}%`}}/></div></div>)}</div><ScrollTable rows={siteRows} height={320}/>
     </Panel>
-    <Panel title="Dashboard Induksi Driver ACH per Site" desc="Induksi yang sudah selesai tetap Completed selama masa dinas driver masih aktif. Saat end masa dinas terlewati, driver otomatis kembali dihitung Open untuk siklus induksi berikutnya." action={<div className="row-actions"><button onClick={()=>exportXlsx('achievement-induksi-driver-persite.xlsx',inductionSiteRows)}><Download size={16}/> Export Summary</button><button className="secondary" onClick={()=>exportXlsx(inductionDetailFileName,inductionRows)}><Download size={16}/> Export Detail Driver</button></div>}>
+    <Panel title="Dashboard Induksi Driver ACH per Site" desc="Induksi hanya dihitung Open saat tanggal onsite sama dengan tanggal acuan. Periode dengan onsite yang masih di depan ditampilkan sebagai Menunggu Onsite, sedangkan periode yang terlewat tetapi belum selesai ditampilkan sebagai Overdue." action={<div className="row-actions"><button onClick={()=>exportXlsx('achievement-induksi-driver-persite.xlsx',inductionSiteRows)}><Download size={16}/> Export Summary</button><button className="secondary" onClick={()=>exportXlsx(inductionDetailFileName,inductionRows)}><Download size={16}/> Export Detail Driver</button></div>}>
       <div className="site-chart">{inductionSiteRows.map(r=><div className="site-bar" key={r.site}><div className="site-meta"><b>{r.site}</b><span>{r.completed_induksi}/{r.target_induksi} · {r.achievement_induksi}%</span></div><div className="bar"><span style={{width:`${Math.min(r.achievement_induksi,100)}%`}}/></div></div>)}</div>
       <ScrollTable rows={inductionSiteRows} height={340}/>
     </Panel>
     <Panel title="Detail Driver Dashboard DRD" desc="Status setiap driver pada tanggal acuan berdasarkan kelulusan terakhir yang masih valid." action={<button onClick={()=>exportXlsx(detailDriverFileName,detailDriverRows)}><Download size={16}/> Export Detail Driver</button>}><ScrollTable rows={detailDriverRows} height={420}/></Panel>
     <Panel title="Driver DRD Completed" desc="Driver aktif yang sudah lulus DRD dan masa berlaku enam bulannya belum berakhir." action={<button onClick={()=>exportXlsx('driver-drd-completed.xlsx',sudahDrdRows)}><Download size={16}/> Export</button>}><ScrollTable rows={sudahDrdRows} height={360}/></Panel>
     <Panel title="Driver DRD Open" desc="Driver yang belum lulus DRD atau masa berlaku DRD-nya sudah berakhir pada tanggal acuan." action={<button onClick={()=>exportXlsx('driver-drd-open.xlsx',belumDrdRows)}><Download size={16}/> Export</button>}><ScrollTable rows={belumDrdRows} height={420}/></Panel>
-    <Panel title="Detail Dashboard Induksi Driver" desc="Completed dipertahankan sampai end masa dinas. Setelah lewat, status kembali Open: butuh input periode, menunggu onsite, atau wajib induksi." action={<button onClick={()=>exportXlsx(inductionDetailFileName,inductionRows)}><Download size={16}/> Export</button>}><div className="summary-strip"><span><b>{inductionTarget}</b> Target Induksi</span><span><b>{openPeriodInput}</b> Butuh Input Periode</span><span><b>{openInduksi}</b> Open</span><span><b>{completedInduksi}</b> Completed</span><span><b>{inductionAch}%</b> Achievement</span></div><ScrollTable rows={inductionRows} height={420}/></Panel>
+    <Panel title="Detail Dashboard Induksi Driver" desc="Open hanya berlaku ketika tanggal onsite sama dengan tanggal acuan. Status Butuh Input Periode selalu mengikuti kondisi periode yang tersimpan saat ini agar konsisten dengan menu Periode Cuti." action={<button onClick={()=>exportXlsx(inductionDetailFileName,inductionRows)}><Download size={16}/> Export</button>}><div className="summary-strip"><span><b>{inductionTarget}</b> Target Induksi</span><span><b>{openPeriodInput}</b> Butuh Input Periode</span><span><b>{waitingOnsiteInduksi}</b> Menunggu Onsite</span><span><b>{openInduksi}</b> Open Hari Ini</span><span><b>{overdueInduksi}</b> Overdue</span><span><b>{completedInduksi}</b> Completed</span><span><b>{inductionAch}%</b> Achievement</span></div><ScrollTable rows={inductionRows} height={420}/></Panel>
   </div>
 }
 function Kpi({title,value,icon}){ return <div className="kpi"><div><span>{title}</span><strong>{value}</strong></div><div className="kpi-icon">{icon}</div></div> }
@@ -888,19 +936,45 @@ function CutiPeriods({profile,work}){
   const [drivers,setDrivers]=useState([]), [periods,setPeriods]=useState([]), [form,setForm]=useState({driver_id:'',cuti_start_date:'',onsite_date:''}), [msg,setMsg]=useState(''), [modalOpen,setModalOpen]=useState(false), [periodPreview,setPeriodPreview]=useState([]), [importingPeriod,setImportingPeriod]=useState(false), [outstandingSearch,setOutstandingSearch]=useState('')
   useEffect(()=>{load()},[work.id])
   async function load(){
-    let dq=supabase.from('drivers').select('*,sites(site_code,site_name)').eq('status','Aktif').order('nama_driver')
-    if(!isAdmin(work))dq=dq.eq('site_id',work.site_id)
-    const [{data:d},{data:p}]=await Promise.all([
-      dq,
-      supabase.from('drd_induction_periods').select('*,drivers(nama_driver,nrp_driver,site_id,end_masa_dinas,sites(site_code,site_name))').order('created_at',{ascending:false})
-    ])
-    const scopedDrivers=d||[]
-    const scopedPeriods=(p||[]).filter(x=>isAdmin(work)||x.drivers?.site_id===work.site_id)
-    setDrivers(scopedDrivers); setPeriods(scopedPeriods)
-    setForm(f=>({...f,driver_id:f.driver_id||scopedDrivers?.[0]?.id||''}))
+    // V18 FIX: ambil seluruh driver/periode dengan pagination. Query langsung Supabase
+    // dapat berhenti di batas row API sehingga nama tertentu tidak muncul di outstanding.
+    const buildDrivers=()=>{
+      let q=supabase.from('drivers').select('*,sites(site_code,site_name)').eq('status','Aktif').order('nama_driver')
+      if(!isAdmin(work)) q=q.eq('site_id',work.site_id)
+      return q
+    }
+    const buildPeriods=()=>supabase.from('drd_induction_periods')
+      .select('*,drivers(nama_driver,nrp_driver,site_id,end_masa_dinas,sites(site_code,site_name))')
+      .order('created_at',{ascending:false})
+    try{
+      const [d,p]=await Promise.all([
+        fetchAllPages(buildDrivers),
+        fetchAllPages(buildPeriods)
+      ])
+      const scopedDrivers=d||[]
+      const scopedPeriods=(p||[]).filter(x=>isAdmin(work)||x.drivers?.site_id===work.site_id)
+      setDrivers(scopedDrivers); setPeriods(scopedPeriods)
+      setForm(f=>({...f,driver_id:f.driver_id||scopedDrivers?.[0]?.id||''}))
+    } catch(e){
+      setMsg(e.message || 'Gagal memuat data periode cuti.')
+    }
   }
   function hasFilledPeriodForCurrentDinas(d){
-    return periods.some(p=>p.driver_id===d.id && String(p.masa_dinas_end_date||p.drivers?.end_masa_dinas||'')===String(d.end_masa_dinas||'') && p.cuti_start_date && p.onsite_date)
+    const currentEnd = excelDateToIso(d.end_masa_dinas)
+    if(!currentEnd) return false
+    return periods.some(p=>{
+      if(String(p.driver_id) !== String(d.id) || !p.cuti_start_date || !p.onsite_date) return false
+      const storedEnd = excelDateToIso(p.masa_dinas_end_date)
+      if(storedEnd) return storedEnd === currentEnd
+
+      // Data legacy dengan masa_dinas_end_date NULL sebelumnya salah dianggap sebagai
+      // periode siklus sekarang karena join drivers.end_masa_dinas selalu berisi nilai terbaru.
+      // Hanya periode legacy Open yang cutinya memang dimulai setelah end masa dinas saat ini
+      // yang boleh menutup outstanding input periode.
+      if(p.status === 'Closed') return false
+      const cuti = excelDateToIso(p.cuti_start_date)
+      return !!cuti && cuti >= currentEnd
+    })
   }
   const outstanding=drivers
     .filter(d=>isExpired(d.end_masa_dinas)&&!hasFilledPeriodForCurrentDinas(d))
@@ -1010,7 +1084,20 @@ function CutiPeriods({profile,work}){
     setMsg(`Import periode selesai. Berhasil ${ok} baris${failed?`, gagal ${failed} baris`:''}.`)
     setPeriodPreview([]); setImportingPeriod(false); load()
   }
-  const rows=periods.map(p=>({driver:p.drivers?.nama_driver,nrp:p.drivers?.nrp_driver,site:p.drivers?.sites?.site_code,end_masa_dinas:p.masa_dinas_end_date||p.drivers?.end_masa_dinas||'-',cuti_mulai:p.cuti_start_date||'-',onsite:p.onsite_date||'-',status:p.status,alert:isOnsiteDue(p)?'Open - Driver wajib induksi':'-'}))
+  const rows=periods.map(p=>({
+    driver:p.drivers?.nama_driver,
+    nrp:p.drivers?.nrp_driver,
+    site:p.drivers?.sites?.site_code,
+    end_masa_dinas:p.masa_dinas_end_date||p.drivers?.end_masa_dinas||'-',
+    cuti_mulai:p.cuti_start_date||'-',
+    onsite:p.onsite_date||'-',
+    status:p.status,
+    alert:isOnsiteDue(p)
+      ? 'Open - Driver wajib induksi hari ini'
+      : isOnsiteOverdue(p)
+        ? 'Overdue - Induksi belum selesai'
+        : (p.status!=='Closed' && excelDateToIso(p.onsite_date)>today() ? 'Menunggu Onsite' : '-')
+  }))
   return <div className="stack">
     <Panel title="Outstanding Input Periode Cuti" desc="Driver yang masa dinasnya habis dan belum punya tanggal cuti + onsite.">
       <div className="outstanding-list-toolbar">
